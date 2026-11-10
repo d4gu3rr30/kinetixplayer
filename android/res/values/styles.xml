@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="KinetixTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/kinetix_bg</item>
+        <item name="android:colorBackground">@color/kinetix_bg</item>
+        <item name="android:statusBarColor">@color/kinetix_bar</item>
+        <item name="android:navigationBarColor">@color/kinetix_bar</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentTransitions">false</item>
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:colorAccent">@color/kinetix_accent</item>
+    </style>
+</resources>

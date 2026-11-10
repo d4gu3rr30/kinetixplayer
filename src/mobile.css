@@ -1,0 +1,141 @@
+/* Mobile polish: chrome-free scrolling, sheet motion, comfy targets */
+
+/* Presence helper: keeps closing layers mounted for the exit animation */
+.presence { display: contents; }
+.presence-closing { pointer-events: none; }
+
+@keyframes modal-fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes modal-fade-out { from { opacity: 1 } to { opacity: 0 } }
+@keyframes modal-pop-in { from { opacity: 0; transform: translateY(20px) scale(.965) } to { opacity: 1; transform: none } }
+@keyframes modal-pop-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translateY(12px) scale(.98) } }
+@keyframes overlay-in { from { opacity: 0; transform: translateY(36px) } to { opacity: 1; transform: none } }
+@keyframes overlay-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translateY(28px) } }
+@keyframes queue-drawer-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(46px) } }
+@keyframes view-fade { from { opacity: 0 } to { opacity: 1 } }
+
+.modal-backdrop { animation: modal-fade-in .24s ease both; }
+.auth-modal, .moment-modal, .pl-editor, .pk-modal { animation: modal-pop-in .32s cubic-bezier(.16, 1, .3, 1) both; }
+
+.modal-backdrop.is-closing,
+.presence-closing .modal-backdrop { animation: modal-fade-out .22s ease both; }
+.modal-backdrop.is-closing .auth-modal,
+.modal-backdrop.is-closing .moment-modal,
+.modal-backdrop.is-closing .pl-editor,
+.modal-backdrop.is-closing .pk-modal,
+.presence-closing .auth-modal,
+.presence-closing .moment-modal,
+.presence-closing .pl-editor,
+.presence-closing .pk-modal { animation: modal-pop-out .22s ease both; }
+.presence-closing .queue-backdrop { animation: modal-fade-out .24s ease both; }
+.presence-closing .queue-drawer { animation: queue-drawer-out .24s ease both; }
+.presence-closing .mobile-player-overlay { animation: overlay-out .26s ease both; }
+
+.view-stage { animation: view-fade .26s ease both; }
+
+/* Library: one tab, three sections */
+.lib-switch { display: none; }
+
+@media (max-width: 680px) {
+  .modal-backdrop { padding: 0 14px; }
+  .auth-modal, .moment-modal { width: 100%; max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain; }
+  .modal-close { width: 42px; height: 42px; }
+  .overlay-head-actions > button,
+  .overlay-head-actions .overlay-menu-wrap > .overlay-settings,
+  .overlay-title-actions button,
+  .overlay-lyrics-actions button,
+  .overlay-moment,
+  .overlay-lyrics-toggle { width: 42px; height: 42px; padding: 0; display: grid; place-items: center; border-radius: 12px; }
+  .overlay-close { min-height: 44px; }
+  .overlay-controls button { width: 52px; height: 52px; }
+  .overlay-controls .overlay-play { width: 62px; height: 62px; transform: none; }
+  .mobile-player-overlay { animation: overlay-in .34s cubic-bezier(.16, 1, .3, 1) both; }
+  .queue-drawer { animation: queue-sheet .44s cubic-bezier(.16, 1, .3, 1) both; }
+
+  /* Page scrollbar stays out of the way on phones */
+  html, body { scrollbar-width: none !important; }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
+
+  /* Library segmented switch */
+  .lib-switch {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    margin: 16px 0 2px;
+    padding: 4px;
+    border: 1px solid #333d30;
+    border-radius: 14px;
+    background: linear-gradient(160deg, #1e241d, #161a17);
+    box-shadow: inset 0 1px 0 #ffffff08;
+  }
+  .lib-switch button {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: #9ca897;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: .2px;
+    transition: background .22s, color .22s, transform .18s;
+  }
+  .lib-switch button:active { transform: scale(.97); }
+  .lib-switch button.active { background: #d7ff57; color: #1a2412; box-shadow: 0 8px 22px #d7ff5726; }
+  .lib-switch button > span {
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    display: grid;
+    place-items: center;
+    border-radius: 99px;
+    background: #2c3529;
+    color: #c9d5c2;
+    font-size: 9px;
+    font-weight: 800;
+  }
+  .lib-switch button.active > span { background: #1a2412; color: #d7ff57; }
+
+  /* Comfy tap targets in track rows and the mini player */
+  .swipe-content { background: #141715; }
+  .track-row { grid-template-columns: minmax(0, 1fr) 38px 38px 38px; }
+  .track-download, .track-add, .track-action {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 11px;
+  }
+  .player-add, .player-like, .player-moment { width: 34px !important; height: 34px !important; }
+  .player-bar { padding-right: 8px; }
+  .mobile-nav button { font-size: 9.5px; gap: 4px; }
+  .mobile-nav button svg { width: 22px; height: 22px; }
+  .mobile-nav button.active svg { filter: drop-shadow(0 0 9px #d7ff5755); }
+
+  /* Notifications ride at the top of the screen */
+  .toast {
+    top: calc(env(safe-area-inset-top) + 12px);
+    bottom: auto;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    animation: toast-top-in .34s cubic-bezier(.16, 1, .3, 1) both;
+  }
+  .toast-leaving { animation: toast-top-out .26s cubic-bezier(.4, 0, 1, 1) both; }
+  .toast-timer { bottom: 0; }
+}
+
+@keyframes toast-top-in { from { opacity: 0; transform: translateY(-22px) scale(.97) } to { opacity: 1; transform: translateY(0) scale(1) } }
+@keyframes toast-top-out { from { opacity: 1; transform: translateY(0) scale(1) } to { opacity: 0; transform: translateY(-16px) scale(.98) } }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop, .auth-modal, .moment-modal, .pl-editor, .pk-modal, .view-stage,
+  .mobile-player-overlay, .toast, .toast-leaving,
+  .modal-backdrop.is-closing, .presence-closing .modal-backdrop,
+  .presence-closing .queue-drawer, .presence-closing .mobile-player-overlay { animation: none !important; }
+}

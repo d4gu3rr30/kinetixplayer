@@ -1,0 +1,52 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: Bundle ID приложения
+        required: false
+        default: app.kinetix.player
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Зависимости
+        run: npm ci
+      - name: Веб-сборка
+        run: npm run build
+      - name: Ассеты в iOS-проект
+        run: |
+          rm -rf ios/Kinetix/www
+          cp -R dist ios/Kinetix/www
+      - name: Архив без подписи
+        run: |
+          xcodebuild \
+            -project ios/Kinetix.xcodeproj \
+            -scheme Kinetix \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Kinetix.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$(node -p 'require("./package.json").version')" \
+            PRODUCT_BUNDLE_IDENTIFIER="${{ inputs.bundle_id }}" \
+            archive
+      - name: Упаковка .ipa
+        run: |
+          mkdir -p build/Payload release/ios
+          cp -R build/Kinetix.xcarchive/Products/Applications/Kinetix.app build/Payload/Kinetix.app
+          ditto -c -k --sequesterRsrc --keepParent build/Payload release/ios/Kinetix-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kinetix-unsigned-ipa
+          path: release/ios/Kinetix-unsigned.ipa
+          if-no-files-found: error

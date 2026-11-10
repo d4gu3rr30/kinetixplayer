@@ -1,0 +1,154 @@
+.desktop-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px 0 14px;
+  background: linear-gradient(180deg, #1c1f19 0%, #131510 68%, #10120e 100%);
+  border-bottom: 1px solid #2c3229;
+  box-shadow: inset 0 1px 0 #ffffff08, 0 10px 26px #00000052;
+  -webkit-app-region: drag;
+  user-select: none;
+  animation: titlebar-drop .45s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.desktop-titlebar:after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #d7ff5740 16%, #d7ff5718 52%, transparent);
+  pointer-events: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  padding-right: 13px;
+  border-right: 1px solid #2b3127;
+  color: #dfe5d7;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -.4px;
+}
+
+.titlebar-brand img {
+  width: 18px;
+  height: 18px;
+  filter: drop-shadow(0 0 9px #d7ff5745);
+}
+
+.titlebar-brand i {
+  font-style: normal;
+  color: #d7ff57;
+}
+
+.titlebar-brand small {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #798271;
+  margin-left: 3px;
+}
+
+.titlebar-drag {
+  flex: 1;
+  align-self: stretch;
+  min-width: 24px;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-controls button {
+  width: 40px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #a3ad99;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: background .18s, color .18s, border-color .18s, transform .15s, box-shadow .18s;
+}
+
+.titlebar-controls button:hover {
+  background: #262d21;
+  border-color: #3b4531;
+  color: #e9f1e1;
+}
+
+.titlebar-controls button:active {
+  transform: scale(.93);
+}
+
+.titlebar-controls button:focus-visible {
+  outline: 2px solid #d7ff5790;
+  outline-offset: 1px;
+}
+
+.titlebar-controls .titlebar-close:hover {
+  background: #c9473f;
+  border-color: #e56c62;
+  color: #fff;
+  box-shadow: 0 0 18px #c9473f5c;
+}
+
+.app-shell.has-windowbar {
+  padding-top: 38px;
+}
+
+.app-shell.has-windowbar .sidebar {
+  top: 38px;
+  height: calc(100dvh - 38px);
+}
+
+@media (min-width: 681px) {
+  .app-shell.has-windowbar .right-panel {
+    height: min(690px, calc(100dvh - 168px));
+  }
+}
+
+@media (max-width: 1180px) {
+  .titlebar-brand small {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .desktop-titlebar {
+    padding-left: 11px;
+  }
+  .titlebar-brand {
+    padding-right: 0;
+    border-right: 0;
+  }
+  .titlebar-controls button {
+    width: 37px;
+  }
+}
+
+@keyframes titlebar-drop {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-titlebar { animation: none; }
+}

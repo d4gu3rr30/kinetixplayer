@@ -1,0 +1,66 @@
+/* Low-end mode: the same layout and controls, without the compositor-heavy decoration. */
+
+html[data-perf="low"] .app-ambient {
+  display: none;
+}
+
+html[data-perf="low"] .app-shell {
+  background: #101115;
+}
+
+/* Blurred glass and gaussian filters are the first things weak GPUs give up. */
+html[data-perf="low"] *,
+html[data-perf="low"] *::before,
+html[data-perf="low"] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* Decorative emissive layers that only exist to be blurred. */
+html[data-perf="low"] .home-hero-aurora,
+html[data-perf="low"] .home-hero::after,
+html[data-perf="low"] .gs-aurora,
+html[data-perf="low"] .gs-mesh,
+html[data-perf="low"] .genre-tile-aurora,
+html[data-perf="low"] .genre-tile-scan,
+html[data-perf="low"] .rec-launch-aurora,
+html[data-perf="low"] .rec-launch-scan,
+html[data-perf="low"] .search-hero-aurora,
+html[data-perf="low"] .search-hero-mesh,
+html[data-perf="low"] .search-hero-orbits,
+html[data-perf="low"] .pulse-sheen,
+html[data-perf="low"] .sidebar-orb,
+html[data-perf="low"] .home-hero-note,
+html[data-perf="low"] .player-visualizer {
+  display: none !important;
+}
+
+/* Endless loops become a single settled frame; functional spinners stay alive. */
+html[data-perf="low"] *,
+html[data-perf="low"] *::before,
+html[data-perf="low"] *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+}
+
+html[data-perf="low"] .spin {
+  animation: spin 2s linear infinite !important;
+}
+
+/* Long home pages are laid out lazily as they scroll into view. */
+html[data-perf="low"] .home-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+
+html[data-perf="low"] .home-hero,
+html[data-perf="low"] .player-bar,
+html[data-perf="low"] .track-row,
+html[data-perf="low"] .home-track-card,
+html[data-perf="low"] .home-quick-card,
+html[data-perf="low"] .home-stat,
+html[data-perf="low"] .collection-rec-launch {
+  box-shadow: none !important;
+}

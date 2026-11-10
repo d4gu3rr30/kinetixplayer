@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#101115" />
+    <meta name="description" content="Kinetix — музыка в твоём ритме. Синхронные тексты и твоя музыкальная коллекция." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Kinetix — музыка в твоём ритме</title>
+    <style>
+      #boot-intro { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; overflow: hidden; background: #0a0c09; color: #eef4e2; font-family: Manrope, system-ui, -apple-system, "Segoe UI", sans-serif; opacity: 1; transition: opacity .5s ease; }
+      html.intro-skip #boot-intro { display: none; }
+      #boot-intro .bi-bg { position: absolute; inset: -12%; background:
+        radial-gradient(58% 52% at 50% 43%, #213014 0%, rgba(33, 48, 20, 0) 70%),
+        radial-gradient(42% 38% at 76% 72%, #16220f 0%, rgba(22, 34, 15, 0) 74%),
+        linear-gradient(160deg, #0e120c, #070907 62%, #050705); transition: opacity .5s ease; }
+      #boot-intro .bi-grain { position: absolute; inset: 0; opacity: .05; pointer-events: none; background-image: radial-gradient(rgba(255, 255, 255, .9) .5px, transparent .6px); background-size: 3px 3px; mix-blend-mode: overlay; }
+      #boot-intro .bi-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(80% 70% at 50% 45%, transparent 40%, rgba(0, 0, 0, .55) 100%); }
+      #boot-intro .bi-stage { position: relative; display: grid; justify-items: center; gap: 18px; padding-bottom: 8px; transition: opacity .5s cubic-bezier(.4, 0, .2, 1), transform .55s cubic-bezier(.4, 0, .2, 1); }
+      #boot-intro .bi-mark-wrap { position: relative; display: grid; place-items: center; width: 86px; height: 86px; }
+      #boot-intro .bi-aura { position: absolute; inset: 2px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(215, 255, 87, .85), rgba(99, 224, 189, .35), rgba(215, 255, 87, 0) 62%, rgba(215, 255, 87, .75)); filter: blur(13px); opacity: .55; animation: bi-aura 4.6s linear infinite; }
+      #boot-intro .bi-mark { position: relative; width: 58px; height: 58px; filter: drop-shadow(0 10px 26px rgba(0, 0, 0, .55)); animation: bi-mark .85s cubic-bezier(.16, 1, .3, 1) both; }
+      #boot-intro .bi-word { display: flex; align-items: baseline; font-size: 46px; font-weight: 800; letter-spacing: -2.6px; line-height: 1; text-shadow: 0 18px 44px rgba(0, 0, 0, .5); }
+      #boot-intro .bi-word span { display: inline-block; animation: bi-letter .72s cubic-bezier(.16, 1, .3, 1) both; }
+      #boot-intro .bi-word span:nth-child(1) { animation-delay: .16s; }
+      #boot-intro .bi-word span:nth-child(2) { animation-delay: .21s; }
+      #boot-intro .bi-word span:nth-child(3) { animation-delay: .26s; }
+      #boot-intro .bi-word span:nth-child(4) { animation-delay: .31s; }
+      #boot-intro .bi-word span:nth-child(5) { animation-delay: .36s; }
+      #boot-intro .bi-word span:nth-child(6) { animation-delay: .41s; }
+      #boot-intro .bi-word span:nth-child(7) { animation-delay: .46s; }
+      #boot-intro .bi-dot { color: #d7ff57; text-shadow: 0 0 26px rgba(215, 255, 87, .55); }
+      #boot-intro .bi-eq { display: flex; align-items: flex-end; gap: 3px; height: 18px; }
+      #boot-intro .bi-eq i { width: 2px; height: 7px; border-radius: 2px; background: #d7ff57; opacity: .8; animation: bi-bar .9s ease-in-out infinite alternate; }
+      #boot-intro .bi-eq i:nth-child(1) { animation-delay: -.15s; height: 9px; }
+      #boot-intro .bi-eq i:nth-child(2) { animation-delay: -.45s; height: 14px; }
+      #boot-intro .bi-eq i:nth-child(3) { animation-delay: -.7s; height: 11px; }
+      #boot-intro .bi-eq i:nth-child(4) { animation-delay: -.3s; height: 16px; }
+      #boot-intro .bi-eq i:nth-child(5) { animation-delay: -.6s; height: 12px; }
+      #boot-intro .bi-eq i:nth-child(6) { animation-delay: -.2s; height: 17px; }
+      #boot-intro .bi-eq i:nth-child(7) { animation-delay: -.5s; height: 10px; }
+      #boot-intro .bi-tag { margin: 4px 0 0; font-size: 9.5px; font-weight: 800; letter-spacing: 3.6px; text-transform: uppercase; color: #93a184; animation: bi-fade .8s ease .55s both; }
+      #boot-intro .bi-progress { position: relative; width: 172px; height: 2px; margin-top: 6px; border-radius: 2px; background: rgba(255, 255, 255, .08); overflow: hidden; animation: bi-fade .6s ease .3s both; }
+      #boot-intro .bi-progress i { position: absolute; inset: 0; border-radius: 2px; background: linear-gradient(90deg, rgba(215, 255, 87, .15), #d7ff57 45%, #b9ff8a); box-shadow: 0 0 14px rgba(215, 255, 87, .55); transform-origin: left center; animation: bi-fill 1.35s cubic-bezier(.35, .0, .2, 1) .18s both, bi-shimmer 1.9s ease-in-out 1.5s infinite; }
+      #boot-intro.is-leaving { opacity: 0; pointer-events: none; }
+      #boot-intro.is-leaving .bi-bg { opacity: 0; }
+      #boot-intro.is-leaving .bi-stage { opacity: 0; transform: translateY(-14px) scale(1.045); }
+      @keyframes bi-letter { from { opacity: 0; transform: translateY(26px) scale(.86); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+      @keyframes bi-mark { from { opacity: 0; transform: scale(.55) rotate(-9deg); filter: blur(8px); } to { opacity: 1; transform: none; filter: blur(0); } }
+      @keyframes bi-aura { to { transform: rotate(360deg); } }
+      @keyframes bi-bar { from { transform: scaleY(.45); } to { transform: scaleY(1); } }
+      @keyframes bi-fade { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+      @keyframes bi-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+      @keyframes bi-shimmer { 0%, 100% { opacity: 1; } 50% { opacity: .62; } }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-intro *, #boot-intro *::before, #boot-intro *::after { animation: none !important; transition: none !important; }
+        #boot-intro.is-leaving .bi-stage { transform: none; }
+      }
+      @media (max-width: 520px) {
+        #boot-intro .bi-word { font-size: 38px; letter-spacing: -2px; }
+        #boot-intro .bi-mark-wrap { width: 72px; height: 72px; }
+        #boot-intro .bi-mark { width: 50px; height: 50px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="boot-intro" aria-hidden="true">
+      <div class="bi-bg"></div>
+      <div class="bi-grain"></div>
+      <div class="bi-vignette"></div>
+      <div class="bi-stage">
+        <div class="bi-mark-wrap">
+          <div class="bi-aura"></div>
+          <img class="bi-mark" src="/kinetix-mark.svg" alt="" />
+        </div>
+        <div class="bi-word"><span>k</span><span>i</span><span>n</span><span>e</span><span>t</span><span>i</span><span>x</span><span class="bi-dot">.</span></div>
+        <div class="bi-eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <p class="bi-tag">музыка в твоём ритме</p>
+        <div class="bi-progress"><i></i></div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var root = document.documentElement
+        var box = document.getElementById('boot-intro')
+        var seen = false
+        try { seen = sessionStorage.getItem('kinetix:intro') === '1' } catch (error) { seen = false }
+        if (!box || seen) { root.classList.add('intro-skip'); return }
+        var started = performance.now()
+        var finished = false
+        function finish() {
+          if (finished) return
+          finished = true
+          try { sessionStorage.setItem('kinetix:intro', '1') } catch (error) { /* private mode */ }
+          box.classList.add('is-leaving')
+          setTimeout(function () { box.remove() }, 580)
+        }
+        window.__kinetixIntroDone = function () {
+          setTimeout(finish, Math.max(0, 1150 - (performance.now() - started)))
+        }
+        setTimeout(finish, 7000)
+      })()
+    </script>
+    <script>
+      if (new URLSearchParams(location.search).get('android') !== '1') {
+        document.write('<script src="https://w.soundcloud.com/player/api.js"><\/script>')
+      }
+    </script>
+    <script type="module" src="/src/bootstrap.tsx"></script>
+  </body>
+</html>

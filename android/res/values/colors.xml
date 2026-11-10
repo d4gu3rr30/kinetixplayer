@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="kinetix_bg">#08080C</color>
+    <color name="kinetix_bar">#08080C</color>
+    <color name="kinetix_accent">#D7FF57</color>
+</resources>

@@ -1,0 +1,62 @@
+/* Android WebView shell tweaks: the app runs inside the native APK, not a desktop browser. */
+html.is-android {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  background: #08080c;
+}
+
+html.is-android body {
+  overscroll-behavior-y: none;
+  touch-action: manipulation;
+}
+
+html.is-android .windowbar,
+html.is-android .windowbar-resize,
+html.is-android .search-shortcut,
+html.is-android .moment-share,
+html.is-android .google-link-panel,
+html.is-android .logout-button {
+  display: none !important;
+}
+
+html.is-android .mobile-nav {
+  padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+}
+
+/* iPhone shell: the web view covers the notch and the home indicator area. */
+html.is-ios .main-content {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+@media (max-width: 680px) {
+  html.is-ios .mobile-nav {
+    height: auto;
+    min-height: calc(65px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  html.is-ios .player-bar {
+    bottom: calc(65px + env(safe-area-inset-bottom, 0px));
+  }
+
+  html.is-ios .app-shell,
+  html.is-ios .app-shell:not(:has(.player-bar)) {
+    padding-bottom: calc(139px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+html.is-android ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+html.is-android input,
+html.is-android textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+html.is-android a,
+html.is-android button {
+  -webkit-touch-callout: none;
+}
