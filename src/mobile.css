@@ -30,7 +30,9 @@
 .presence-closing .queue-drawer { animation: queue-drawer-out .24s ease both; }
 .presence-closing .mobile-player-overlay { animation: overlay-out .26s ease both; }
 
-.view-stage { animation: view-fade .26s ease both; }
+/* No fill: a filled opacity animation keeps the element a stacking context
+   forever, and fixed overlays inside it would stay under the player bar. */
+.view-stage { animation: view-fade .26s ease; }
 
 /* Library: one tab, three sections */
 .lib-switch { display: none; }

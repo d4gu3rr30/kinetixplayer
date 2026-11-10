@@ -77,6 +77,12 @@
   z-index: 1;
 }
 
+/* z-index:1 is needed to sit above the ambient layer, but it also traps fixed
+   modals inside the column below the player bar (20) and bottom nav (25). */
+.main-content:has(.modal-backdrop) {
+  z-index: 200;
+}
+
 .home-hero-aura {
   background: rgb(var(--art-a));
   transition: background-color 1.2s ease;
