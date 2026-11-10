@@ -82,8 +82,6 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         guard message.name == "kinetixFile", let body = message.body as? [String: Any] else { return }
         guard let base64 = body["data"] as? String, !base64.isEmpty else { return }
         guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else { return }
-        let rawMime = (body["mime"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let mime = rawMime.isEmpty ? "application/octet-stream" : rawMime
         let target = FileManager.default.temporaryDirectory.appendingPathComponent(sanitizeName(body["name"] as? String))
         do {
             try data.write(to: target, options: .atomic)

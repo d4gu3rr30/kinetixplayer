@@ -1,6 +1,6 @@
 import Foundation
 
-enum KinetixError: LocalizedError {
+struct KinetixError: LocalizedError {
     let message: String
 
     init(_ message: String) {
