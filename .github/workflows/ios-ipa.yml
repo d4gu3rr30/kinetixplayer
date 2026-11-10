@@ -1,6 +1,8 @@
 name: iOS unsigned IPA
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       bundle_id:
@@ -28,6 +30,8 @@ jobs:
           cp -R dist ios/Kinetix/www
       - name: Архив без подписи
         run: |
+          BUNDLE_ID="${{ inputs.bundle_id }}"
+          BUNDLE_ID="${BUNDLE_ID:-app.kinetix.player}"
           xcodebuild \
             -project ios/Kinetix.xcodeproj \
             -scheme Kinetix \
@@ -38,7 +42,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             MARKETING_VERSION="$(node -p 'require("./package.json").version')" \
-            PRODUCT_BUNDLE_IDENTIFIER="${{ inputs.bundle_id }}" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             archive
       - name: Упаковка .ipa
         run: |
