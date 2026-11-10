@@ -77,7 +77,8 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
   const [transferBusy, setTransferBusy] = useState(false)
   const [transferError, setTransferError] = useState('')
   const desktopBridge = window.kinetixApp
-  const nativeSources = isAndroid && !isIOS
+  const onDevice = isAndroid
+  const desktopCookies = !isAndroid
   const [autoLaunch, setAutoLaunch] = useState<{ supported: boolean; enabled: boolean } | null>(null)
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false)
   const counts = localCounts()
@@ -115,7 +116,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
       if (!response.ok) throw new Error(data.error || 'Не удалось сохранить токен')
       adoptTokens(data)
       setTokenDraft(prev => ({ ...prev, [name]: '' }))
-      onNotice(`${name === 'vk' ? 'Токен ВКонтакте сохранён' : 'Токен Яндекс Музыки сохранён'} ${nativeSources ? 'на этом устройстве' : 'в .env'}`)
+      onNotice(`${name === 'vk' ? 'Токен ВКонтакте сохранён' : 'Токен Яндекс Музыки сохранён'} ${onDevice ? 'на этом устройстве' : 'в .env'}`)
       onConfigChange()
     } catch (error) { onNotice(error instanceof Error ? error.message : 'Не удалось сохранить токен') }
     finally { setTokenSaving('') }
@@ -246,7 +247,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Не удалось сохранить')
       adopt(data)
-      onNotice(payload.mode === 'file' ? (nativeSources ? 'Cookies сохранены на этом устройстве' : 'Cookies сохранены на этом компьютере') : payload.mode === 'browser' ? 'YouTube будет читать cookies из браузера' : 'Вход в YouTube отключён')
+      onNotice(payload.mode === 'file' ? (onDevice ? 'Cookies сохранены на этом устройстве' : 'Cookies сохранены на этом компьютере') : payload.mode === 'browser' ? 'YouTube будет читать cookies из браузера' : 'Вход в YouTube отключён')
       if (payload.mode === 'file') setCookies('')
     } catch (error) { onNotice(error instanceof Error ? error.message : 'Не удалось сохранить настройки YouTube') }
     finally { setSaving(false) }
@@ -282,7 +283,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
         <div>
           <span className="settings-kicker"><Sparkles size={12}/> ЦЕНТР УПРАВЛЕНИЯ</span>
           <h1>Настройки<span className="settings-dot">.</span></h1>
-          <p>{isIOS ? 'Звук, офлайн и твой профиль — всё на устройстве.' : isAndroid ? 'Звук, источники и твой профиль — всё на устройстве.' : 'Звук, движение и вход в YouTube — всё в одном месте.'}</p>
+          <p>{isAndroid ? 'Звук, источники и твой профиль — всё на устройстве.' : 'Звук, движение и вход в YouTube — всё в одном месте.'}</p>
         </div>
         <div className="settings-orbit" aria-hidden="true"><SlidersHorizontal size={54}/></div>
       </div>
@@ -310,15 +311,14 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
         <div className="set-note"><Timer size={15}/><span>Плавный переход работает для треков, которые играет сам плеер. Внешние окна SoundCloud управляются отдельно.</span></div>
       </section>
 
-      {!isIOS && <>
       <section className="set-card youtube-card">
         <header><span className="set-icon youtube"><MonitorPlay size={20}/></span><div><strong>Вход в YouTube</strong><small>Для возрастных и «не для ботов» видео</small></div><span className={`set-status ${connected ? 'on' : ''}`}>{connected ? <Check size={12}/> : <CircleAlert size={12}/>} {statusLabel}</span></header>
-        <p className="youtube-lead">{nativeSources ? 'YouTube иногда просит войти в аккаунт и пропускает трек. Вставь cookies из браузера — тогда возрастные и закрытые видео играют как обычные. Cookies остаются только на этом устройстве.' : 'YouTube иногда просит войти в аккаунт и пропускает трек. Плеер может взять cookies из твоего браузера — тогда возрастные и закрытые видео играют как обычные. Cookies остаются только на этом компьютере.'}</p>
-        {!nativeSources && <div className="youtube-tabs">
+        <p className="youtube-lead">{onDevice ? 'YouTube иногда просит войти в аккаунт и пропускает трек. Вставь cookies из браузера — тогда возрастные и закрытые видео играют как обычные. Cookies остаются только на этом устройстве.' : 'YouTube иногда просит войти в аккаунт и пропускает трек. Плеер может взять cookies из твоего браузера — тогда возрастные и закрытые видео играют как обычные. Cookies остаются только на этом компьютере.'}</p>
+        {desktopCookies && <div className="youtube-tabs">
           <button className={mode === 'browser' ? 'active' : ''} onClick={() => setMode('browser')}><MonitorSmartphone size={15}/> Из браузера</button>
           <button className={mode === 'file' ? 'active' : ''} onClick={() => setMode('file')}><FileText size={15}/> cookies.txt</button>
         </div>}
-        {!nativeSources && mode === 'browser' ? <div className="youtube-pane">
+        {desktopCookies && mode === 'browser' ? <div className="youtube-pane">
           <p className="youtube-hint">Выбери браузер, где ты вошёл в YouTube. Закрой его перед сохранением — так cookies прочитаются без блокировки.</p>
           <div className="browser-chips">{browsers.map(item => <button key={item.id} className={browser === item.id ? 'active' : ''} onClick={() => setBrowser(item.id)}>{item.label}</button>)}</div>
           <div className="youtube-actions">
@@ -327,7 +327,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
             {connected && <button className="set-danger" disabled={saving} onClick={disconnect}><Trash2 size={15}/> Отключить</button>}
           </div>
         </div> : <div className="youtube-pane">
-          <p className="youtube-hint">{nativeSources ? 'Открой youtube.com в браузере на компьютере, экспортируй cookies расширением вроде «Get cookies.txt LOCALLY» и вставь сюда. Поддерживается и JSON-экспорт.' : 'Экспортируй cookies расширением вроде «Get cookies.txt LOCALLY» с сайта youtube.com и вставь сюда. Поддерживается и JSON-экспорт.'}</p>
+          <p className="youtube-hint">{isIOS ? 'Открой youtube.com на компьютере, экспортируй cookies расширением вроде «Get cookies.txt LOCALLY» и вставь текст сюда — например, через Заметки или сохранённое сообщение. Поддерживается и JSON-экспорт.' : onDevice ? 'Открой youtube.com в браузере на компьютере, экспортируй cookies расширением вроде «Get cookies.txt LOCALLY» и вставь сюда. Поддерживается и JSON-экспорт.' : 'Экспортируй cookies расширением вроде «Get cookies.txt LOCALLY» с сайта youtube.com и вставь сюда. Поддерживается и JSON-экспорт.'}</p>
           <textarea value={cookies} onChange={event => setCookies(event.target.value)} placeholder={'# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t…\tSID\t…'} spellCheck={false} aria-label="Содержимое cookies.txt"/>
           <div className="youtube-actions">
             <button className="set-primary" disabled={saving || !cookies.trim()} onClick={() => saveAuth({ mode: 'file', cookies })}>{saving ? <Loader2 className="spin" size={15}/> : <ShieldCheck size={15}/>} Сохранить и подключить</button>
@@ -336,12 +336,12 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
           </div>
         </div>}
         {test && <div className={`youtube-test ${test.ok ? 'ok' : 'fail'}`}>{test.ok ? <><Check size={14}/> YouTube отвечает{test.title ? `: «${test.title}»` : ''}. Подключение работает.</> : <><CircleAlert size={14}/> {test.error || 'Проверка не удалась'}</>}</div>}
-        <div className="youtube-foot"><ShieldCheck size={13}/> {nativeSources ? 'Cookies хранятся только на этом устройстве и никуда не отправляются.' : <>Cookies хранятся локально в <code>.data/youtube-cookies.txt</code> и никогда не покидают этот компьютер.</>}</div>
+        <div className="youtube-foot"><ShieldCheck size={13}/> {onDevice ? 'Cookies хранятся только на этом устройстве и никуда не отправляются.' : <>Cookies хранятся локально в <code>.data/youtube-cookies.txt</code> и никогда не покидают этот компьютер.</>}</div>
       </section>
 
       <section className="set-card tokens-card">
         <header><span className="set-icon tokens"><KeyRound size={18}/></span><div><strong>Токены источников</strong><small>ВКонтакте и Яндекс Музыка</small></div></header>
-        <p className="youtube-lead">{nativeSources ? 'Вставь свой токен — плеер сохранит его на этом устройстве и сразу начнёт использовать ВКонтакте и Яндекс Музыку в поиске и рекомендациях.' : <>Вставь свой токен — плеер запишет его в <code>.env</code> и сразу начнёт использовать. Значения остаются только на этом компьютере.</>}</p>
+        <p className="youtube-lead">{onDevice ? 'Вставь свой токен — плеер сохранит его на этом устройстве и сразу начнёт использовать ВКонтакте и Яндекс Музыку в поиске и рекомендациях.' : <>Вставь свой токен — плеер запишет его в <code>.env</code> и сразу начнёт использовать. Значения остаются только на этом компьютере.</>}</p>
         <div className="token-list">{tokenSources.map(source => {
           const state = tokens?.[source.id]
           const busy = tokenSaving === source.id
@@ -365,7 +365,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
             </div>
           </div>
         })}</div>
-        <div className="youtube-foot"><ShieldCheck size={13}/> {nativeSources ? 'Токены хранятся только на этом устройстве и никуда не отправляются.' : <>Токены пишутся в <code>.env</code> и никуда не отправляются.</>}</div>
+        <div className="youtube-foot"><ShieldCheck size={13}/> {onDevice ? 'Токены хранятся только на этом устройстве и никуда не отправляются.' : <>Токены пишутся в <code>.env</code> и никуда не отправляются.</>}</div>
       </section>
 
       {!isAndroid && <section className="set-card google-card">
@@ -388,7 +388,6 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
         </div>
         <div className="youtube-foot"><ShieldCheck size={13}/> Для веб-клиента добавьте redirect URI <code>http://127.0.0.1:8788/api/auth/google/callback</code>. Значения хранятся в <code>.env</code> на этом компьютере.</div>
       </section>}
-      </>}
 
       <section className="set-card transfer-card">
         <header><span className="set-icon tokens"><ArrowLeftRight size={18}/></span><div><strong>Перенос данных</strong><small>Браузер ↔ приложение</small></div>{user && <span className="set-status on"><Check size={12}/> {user.email}</span>}</header>
@@ -403,7 +402,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
           <button className="set-primary" disabled={transferBusy} onClick={downloadTransfer}><Download size={15}/> {user ? 'Скачать аккаунт и коллекции' : 'Скачать коллекции'}</button>
           <label className={`transfer-upload ${transferBusy ? 'is-busy' : ''}`}>
             <Upload size={15}/> {transferBusy ? 'Импортируем…' : 'Импортировать файл'}
-            <input type="file" accept="application/json,.json" disabled={transferBusy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importTransfer(file) }}/>
+            <input type="file" accept={isIOS ? undefined : 'application/json,.json'} disabled={transferBusy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importTransfer(file) }}/>
           </label>
         </div>
         {transferError && <div className="transfer-error">{transferError}</div>}
@@ -431,7 +430,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
 
       <section className="set-card set-about">
         <header><span className="set-icon"><Sparkles size={18}/></span><div><strong>Kinetix</strong><small>Твой ритм. Твои правила.</small></div></header>
-        <div className="set-sources">{isIOS ? <><span>YouTube</span><span>Оффлайн-файлы</span></> : <><span>YouTube</span><span>Яндекс Музыка</span><span>ВКонтакте</span><span>Оффлайн-файлы</span></>}</div>
+        <div className="set-sources"><span>YouTube</span><span>Яндекс Музыка</span><span>ВКонтакте</span><span>Оффлайн-файлы</span></div>
         <p>Полные версии треков, неофициальные каталоги, моменты и рекомендации — в одном плеере.</p>
       </section>
     </div>

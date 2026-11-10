@@ -75,6 +75,7 @@ final class InnerTube {
     private var searchCache: [String: CacheEntry] = [:]
     private var relatedCache: [String: CacheEntry] = [:]
     private var streams: [String: Stream] = [:]
+    private var cookieHeader = ""
 
     private static let dashedTitle = regex(#"^(.{1,60}?)\s+[-–—]\s+(.{1,140})$"#)
     private static let titleNoise = regex(#"\s*[\[(][^\])]*(?:official\s*(?:music\s*)?(?:video|audio|visualizer|lyric\s*video)|lyrics?|клип|премьера|premiere|m/?v|audio|visualizer)[^\])]*[\])]\s*$"#, options: [.caseInsensitive])
@@ -85,6 +86,17 @@ final class InnerTube {
     }
 
     private init() {}
+
+    /// Cookies saved from a signed-in browser; empty means anonymous requests.
+    func setCookies(_ header: String) {
+        let value = header.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.lock()
+        cookieHeader = value
+        searchCache.removeAll()
+        relatedCache.removeAll()
+        streams.removeAll()
+        lock.unlock()
+    }
 
     func search(_ query: String, limit: Int, artistMode: Bool) throws -> [[String: Any]] {
         let key = (artistMode ? "a|" : "t|") + "\(limit)|" + query.lowercased()
@@ -227,6 +239,15 @@ final class InnerTube {
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
         request.setValue("28", forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        lock.lock()
+        let cookies = cookieHeader
+        lock.unlock()
+        if !cookies.isEmpty {
+            let safe = cookies.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+            request.setValue(safe, forHTTPHeaderField: "Cookie")
+            request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
+            request.setValue("https://www.youtube.com", forHTTPHeaderField: "X-Origin")
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try SyncHTTP.data(for: request, timeout: 35)
         guard let http = response as? HTTPURLResponse else { throw KinetixError("YouTube не ответил") }

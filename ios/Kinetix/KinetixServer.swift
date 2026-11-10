@@ -158,6 +158,64 @@ final class KinetixServer {
             guard isVideoId(videoId) else { return try sendJSON(client, status: 400, ["error": "Некорректный трек"]) }
             return try proxyStream(videoId, range: request.headers["range"], client: client, retry: true)
         }
+        if path == "/api/integrations" {
+            if request.method == "POST" { return try saveIntegrations(request, client: client) }
+            return try sendJSON(client, status: 200, integrations())
+        }
+        if path == "/api/youtube-auth" {
+            if request.method == "POST" { return try saveYouTubeAuth(request, client: client) }
+            if request.method == "DELETE" { return try clearYouTubeAuth(client: client) }
+            return try sendJSON(client, status: 200, youtubeStatus())
+        }
+        if path == "/api/youtube-auth/test" {
+            return try testYouTube(client: client)
+        }
+        if path == "/api/vk-search" {
+            let query = request.param("q").trimmingCharacters(in: .whitespacesAndNewlines)
+            if query.isEmpty { return try sendJSON(client, status: 400, ["error": "Введите запрос"]) }
+            let token = NativeStore.shared.vk
+            if token.isEmpty { return try sendJSON(client, status: 400, ["error": "Добавьте токен ВКонтакте в настройках"]) }
+            let limit = clamp(Int(request.param("limit")) ?? 30, 1, 50)
+            let offset = clamp(Int(request.param("offset")) ?? 0, 0, 200)
+            let artist = request.param("mode") == "artist"
+            let tracks = try VkClient.search(token: token, query: String(query.prefix(160)), limit: limit, artist: artist, offset: offset)
+            return try sendJSON(client, status: 200, ["tracks": tracks])
+        }
+        if path == "/api/yandex-search" {
+            let query = request.param("q").trimmingCharacters(in: .whitespacesAndNewlines)
+            if query.isEmpty { return try sendJSON(client, status: 400, ["error": "Введите запрос"]) }
+            let token = NativeStore.shared.yandex
+            if token.isEmpty { return try sendJSON(client, status: 400, ["error": "Добавьте токен Яндекс Музыки в настройках"]) }
+            let limit = clamp(Int(request.param("limit")) ?? 30, 1, 50)
+            let tracks = try YandexClient.search(token: token, query: String(query.prefix(160)), limit: limit)
+            return try sendJSON(client, status: 200, ["tracks": tracks])
+        }
+        if path == "/api/vk-stream" {
+            let id = request.param("id")
+            guard id.range(of: #"^(?:vk:)?-?\d+_\d+$"#, options: .regularExpression) != nil else {
+                return try sendJSON(client, status: 400, ["error": "Некорректный трек"])
+            }
+            let token = NativeStore.shared.vk
+            if token.isEmpty { return try sendJSON(client, status: 400, ["error": "Добавьте токен ВКонтакте в настройках"]) }
+            let stream = try VkClient.resolve(token: token, rawId: id)
+            return try proxyRemote(stream.url, fallbackType: "audio/mpeg", range: request.headers["range"], client: client, refresh: {
+                VkClient.forget(id)
+                return try VkClient.resolve(token: token, rawId: id).url
+            })
+        }
+        if path == "/api/yandex-stream" {
+            let id = request.param("id")
+            guard id.range(of: #"^\d{1,20}$"#, options: .regularExpression) != nil else {
+                return try sendJSON(client, status: 400, ["error": "Некорректный трек"])
+            }
+            let token = NativeStore.shared.yandex
+            if token.isEmpty { return try sendJSON(client, status: 400, ["error": "Добавьте токен Яндекс Музыки в настройках"]) }
+            let stream = try YandexClient.resolve(token: token, track: id)
+            return try proxyRemote(stream.url, fallbackType: stream.type, range: request.headers["range"], client: client, refresh: {
+                YandexClient.forget(id)
+                return try YandexClient.resolve(token: token, track: id).url
+            })
+        }
         if path == "/api/artist-photo" {
             return try artistPhoto(request.param("name").trimmingCharacters(in: .whitespacesAndNewlines), client: client)
         }
@@ -172,6 +230,8 @@ final class KinetixServer {
     }
 
     private func config() -> [String: Any] {
+        let vk = !NativeStore.shared.vk.isEmpty
+        let yandex = !NativeStore.shared.yandex.isEmpty
         return [
             "ready": true,
             "android": true,
@@ -180,15 +240,117 @@ final class KinetixServer {
             "archive": true,
             "youtube": true,
             "youtubeDl": true,
-            "yandex": false,
-            "yandexFull": false,
-            "vk": false,
+            "yandex": true,
+            "yandexFull": yandex,
+            "vk": vk,
             "vkIssue": "",
             "offline": false,
             "desktop": false,
             "googleClientId": "",
             "googleSecret": false
         ]
+    }
+
+    private func tokenStatus(_ value: String) -> [String: Any] {
+        ["set": !value.isEmpty, "length": value.count]
+    }
+
+    private func integrations() -> [String: Any] {
+        [
+            "vk": tokenStatus(NativeStore.shared.vk),
+            "yandex": tokenStatus(NativeStore.shared.yandex),
+            "google": tokenStatus(""),
+            "googleSecret": tokenStatus("")
+        ]
+    }
+
+    private func youtubeStatus() -> [String: Any] {
+        let store = NativeStore.shared
+        let on = store.hasCookies
+        return [
+            "mode": on ? "file" : "off",
+            "browser": "",
+            "cookieCount": store.cookieCount,
+            "updatedAt": store.cookieUpdated,
+            "ytDlp": true,
+            "usingEnv": false
+        ]
+    }
+
+    private func jsonBody(_ request: KinetixRequest) -> [String: Any]? {
+        if request.body.isEmpty { return nil }
+        guard let value = try? JSONSerialization.jsonObject(with: request.body) else { return nil }
+        return value as? [String: Any]
+    }
+
+    private func saveIntegrations(_ request: KinetixRequest, client: Int32) throws {
+        guard let payload = jsonBody(request) else {
+            return try sendJSON(client, status: 400, ["error": "Некорректный запрос"])
+        }
+        for name in ["vk", "yandex"] {
+            guard let raw = payload[name], !(raw is NSNull) else { continue }
+            let value = (raw as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.count > 4096 {
+                return try sendJSON(client, status: 400, ["error": "Токен слишком длинный"])
+            }
+            NativeStore.shared.setToken(name, value)
+        }
+        try sendJSON(client, status: 200, integrations())
+    }
+
+    private func saveYouTubeAuth(_ request: KinetixRequest, client: Int32) throws {
+        guard let payload = jsonBody(request) else {
+            return try sendJSON(client, status: 400, ["error": "Некорректный запрос"])
+        }
+        let mode = payload["mode"] as? String ?? "file"
+        if mode == "off" {
+            return try clearYouTubeAuth(client: client)
+        }
+        if mode == "browser" {
+            return try sendJSON(client, status: 400, ["error": "На iPhone cookies можно только вставить файлом"])
+        }
+        guard let parsed = Cookies.parse(payload["cookies"] as? String ?? "") else {
+            return try sendJSON(client, status: 400, ["error": "В cookies не нашлось данных YouTube. Нужен cookies.txt (Netscape) или JSON-экспорт целиком"])
+        }
+        NativeStore.shared.saveCookies(header: parsed.header, count: parsed.count)
+        InnerTube.shared.setCookies(parsed.header)
+        try sendJSON(client, status: 200, youtubeStatus())
+    }
+
+    private func clearYouTubeAuth(client: Int32) throws {
+        NativeStore.shared.clearCookies()
+        InnerTube.shared.setCookies("")
+        try sendJSON(client, status: 200, youtubeStatus())
+    }
+
+    private func testYouTube(client: Int32) throws {
+        do {
+            let tracks = try InnerTube.shared.search("music", limit: 1, artistMode: false)
+            let title = tracks.first?["title"] as? String ?? ""
+            try sendJSON(client, status: 200, ["ok": true, "title": title])
+        } catch {
+            let reason = error.localizedDescription
+            try sendJSON(client, status: 200, ["ok": false, "error": reason.isEmpty ? "YouTube не ответил" : reason])
+        }
+    }
+
+    private func proxyRemote(_ url: String, fallbackType: String, range: String?, client: Int32, refresh: (() throws -> String)?) throws {
+        guard let target = URL(string: url), !url.isEmpty else { throw KinetixError("Источник не отдал поток") }
+        var upstream = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
+        upstream.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        upstream.setValue("*/*", forHTTPHeaderField: "Accept")
+        if let range = range, !range.isEmpty { upstream.setValue(range, forHTTPHeaderField: "Range") }
+
+        let downloader = StreamDownloader(client: client, fallbackType: fallbackType)
+        downloader.run(upstream)
+
+        if !downloader.headWritten {
+            if let refresh = refresh, downloader.status == 403 || downloader.status == 404 || downloader.status == 410 {
+                return try proxyRemote(try refresh(), fallbackType: fallbackType, range: range, client: client, refresh: nil)
+            }
+            let detail = downloader.detail.isEmpty ? "" : " " + downloader.detail
+            throw KinetixError("Источник не отдал поток (\(downloader.status))" + detail)
+        }
     }
 
     private func proxyStream(_ videoId: String, range: String?, client: Int32, retry: Bool) throws {

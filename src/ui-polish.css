@@ -569,8 +569,10 @@
 }
 .transfer-actions button:disabled,
 .transfer-upload.is-busy { opacity: .45; cursor: default; transform: none !important; box-shadow: none !important; }
-.transfer-upload { position: relative; background: #232a20; border-color: #414d36; color: #c0cbb9; }
+.transfer-upload { position: relative; overflow: hidden; background: #232a20; border-color: #414d36; color: #c0cbb9; }
 .transfer-upload:hover { border-color: #d7ff57; color: #d7ff57; }
-.transfer-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+/* WKWebView on iOS only opens the document picker for a direct tap on the input,
+   so the invisible input covers the whole button instead of relying on the label. */
+.transfer-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
 .transfer-error { margin-top: 10px; font-size: 10px; line-height: 1.5; color: #ff9d8a; }
 .transfer-hint { margin: 0; font-size: 10px; line-height: 1.6; color: #8f9b88; }

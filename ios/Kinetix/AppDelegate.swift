@@ -11,6 +11,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         try? session.setCategory(.playback, mode: .default, options: [])
         try? session.setActive(true)
 
+        InnerTube.shared.setCookies(NativeStore.shared.cookies)
+
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.backgroundColor = UIColor(red: 8 / 255, green: 8 / 255, blue: 12 / 255, alpha: 1)
         window.rootViewController = WebViewController()

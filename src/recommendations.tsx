@@ -36,7 +36,7 @@ export function RecommendationsView({ seed, scope, mode, collection, tracks, loa
   onClearCollection: () => void
   trackList: ReactNode
 }) {
-  const available = usableSources({ vkEnabled, vkIssue, youtubeDl })
+  const available = usableSources({ vkEnabled, vkIssue, youtubeDl, yandexEnabled: yandexFull })
   const artworks = (mode === 'collection' ? [...collection.map(track => track.artwork), ...tracks.map(track => track.artwork)] : mode === 'mix' ? [...mixArt, ...tracks.map(track => track.artwork)] : [seed?.artwork, ...tracks.map(track => track.artwork)]).filter((value): value is string => Boolean(value)).slice(0, 3)
   const artists = [...new Map(tracks.filter(track => track.artist).map(track => [track.artist.toLowerCase(), track.artist])).values()].slice(0, 7)
   const hue = hueFrom(mode === 'collection' ? collection.map(track => `${track.artist} ${track.title}`).join(' ') || 'kinetix collection' : mode === 'mix' ? 'kinetix mix' : seed ? `${seed.artist} ${seed.title}` : 'kinetix recommendations')

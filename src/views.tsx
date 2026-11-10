@@ -27,8 +27,8 @@ export function sourceHint(id: SearchSource, yandexFull: boolean, youtubeDl: boo
   if (names.length === 1) return `${names[0]} — единственный доступный источник`
   return `${names.slice(0, -1).join(', ')} и ${names[names.length - 1]} сразу`
 }
-export function usableSources({ vkEnabled, vkIssue = '', youtubeDl = true }: { vkEnabled: boolean; vkIssue?: string; youtubeDl?: boolean }): SearchSource[] {
-  return ALL_SOURCES.filter(id => id === 'all' || (id === 'youtube' ? youtubeDl : id === 'vk' ? vkEnabled && !vkIssue.trim() : !isAndroid))
+export function usableSources({ vkEnabled, vkIssue = '', youtubeDl = true, yandexEnabled = !isAndroid }: { vkEnabled: boolean; vkIssue?: string; youtubeDl?: boolean; yandexEnabled?: boolean }): SearchSource[] {
+  return ALL_SOURCES.filter(id => id === 'all' || (id === 'youtube' ? youtubeDl : id === 'vk' ? vkEnabled && !vkIssue.trim() : yandexEnabled))
 }
 
 export function SourcePicker({ value, onChange, available, yandexFull, youtubeDl, vkIssue = '', label = 'ИСТОЧНИК', compact = false, inline = false }: {
@@ -302,7 +302,7 @@ export function HomeView({ onSearch, onImport, onGenre, onArtist, onCatalog, onC
     <section className="home-section home-for-you" style={{ '--i': 1 } as CSSProperties}>
       <div className="home-section-head"><div><span className="home-kicker">СОБРАНО ПОД ТЕБЯ</span><h2>Для тебя <span className="heading-star">✳</span></h2></div><span className="home-section-note">живой поток · без остановки</span></div>
       <RecommendationLaunch onLaunch={onRecommendations} onPlayNow={onRecommendationsNow} launching={recommendationsLaunching} artworks={recommendationArt}/>
-      <div className="home-for-you-tools"><span><Sparkles size={12}/> Откуда берём треки для микса</span><SourcePicker value={recommendSource} onChange={onRecommendSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl })} yandexFull={yandexFull} youtubeDl={youtubeDl} compact inline/></div>
+      <div className="home-for-you-tools"><span><Sparkles size={12}/> Откуда берём треки для микса</span><SourcePicker value={recommendSource} onChange={onRecommendSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl, yandexEnabled: yandexFull })} yandexFull={yandexFull} youtubeDl={youtubeDl} compact inline/></div>
       <div className="collection-rec-section"><button className="collection-rec-launch" onClick={onRecommendCollection}><span className="collection-rec-glyph"><ListMusic size={22}/></span><span className="collection-rec-text"><small>РЕКОМЕНДАЦИИ ВЫБОРКОЙ</small><strong>Моя подборка</strong><em>{collectionCount ? `${collectionCount} ${plural(collectionCount, 'трек', 'трека', 'треков')} в основе — собери отдельный поток` : 'Добавь треки через меню «⋯» и собери свой поток'}</em></span>{collectionArt.length ? <span className="collection-rec-covers">{collectionArt.map((artwork, index) => <i key={`${artwork}-${index}`} style={{ backgroundImage: `url("${artwork.replace(/"/g, '')}")` }}/>)}</span> : null}<span className="collection-rec-go">{collectionCount ? 'Собрать поток' : 'Открыть'} <ArrowRight size={15}/></span></button></div>
     </section>
     <section className="home-section home-quick" style={{ '--i': 2 } as CSSProperties}>
@@ -399,7 +399,7 @@ function SearchView({ query, setQuery, searchSource, setSearchSource, vkEnabled,
   const inputRef = useRef<HTMLInputElement>(null)
   const needle = query.trim()
   const isLink = /soundcloud\.com\//i.test(needle)
-  const available = usableSources({ vkEnabled, vkIssue, youtubeDl })
+  const available = usableSources({ vkEnabled, vkIssue, youtubeDl, yandexEnabled: yandexFull })
   const artistIndex = new Map<string, { name: string; artwork?: string; count: number }>()
   const counts: Record<'youtube' | 'yandex' | 'vk', number> = { youtube: 0, yandex: 0, vk: 0 }
   for (const track of tracks) {
@@ -612,7 +612,7 @@ export function GenreView({ genre, tracksCount, shownCount, sources, loading, er
     </div>
     <div className="genre-toolbar">
       <div className="genre-search"><Search size={17}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Поиск внутри «${genre.label}»`} aria-label="Поиск по трекам жанра"/>{query && <button onClick={() => setQuery('')} aria-label="Очистить поиск"><X size={13}/></button>}</div>
-      <SourcePicker value={source} onChange={onSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl })} yandexFull={yandexFull} youtubeDl={youtubeDl} compact/>
+      <SourcePicker value={source} onChange={onSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl, yandexEnabled: yandexFull })} yandexFull={yandexFull} youtubeDl={youtubeDl} compact/>
       <span className="genre-toolbar-count">{shownCount} / {tracksCount}</span>
     </div>
     <div className="genre-moods"><span>НАСТРОЕНИЕ</span>{genre.tags.map(tag => <button key={tag} className={mood === tag ? 'active' : ''} onClick={() => onMood(tag)} aria-pressed={mood === tag}>{tag}</button>)}</div>

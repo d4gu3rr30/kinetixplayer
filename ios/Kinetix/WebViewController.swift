@@ -6,6 +6,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
 
     private var webView: WKWebView!
     private var server: KinetixServer?
+    private var keyboardToken: NSObjectProtocol?
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
@@ -47,9 +48,20 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         } catch {
             showFatal(error.localizedDescription)
         }
+
+        // WKWebView keeps its frame under the keyboard, so bottom sheets would
+        // hide behind it. Mirror the visible height into the CSS viewport vars.
+        keyboardToken = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self, let webView = self.webView else { return }
+            let frame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+            let overlap = max(0, self.view.bounds.maxY - self.view.convert(frame, from: nil).minY)
+            let script = "document.documentElement.style.setProperty('--kb-inset','\(Int(overlap))px');if(window.__kinetixSyncViewport)window.__kinetixSyncViewport()"
+            webView.evaluateJavaScript(script, completionHandler: nil)
+        }
     }
 
     deinit {
+        if let keyboardToken { NotificationCenter.default.removeObserver(keyboardToken) }
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "kinetixFile")
         server?.stop()
     }

@@ -11,6 +11,10 @@
 		CC0000000000000000000002 /* WebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000002 /* WebViewController.swift */; };
 		CC0000000000000000000003 /* InnerTube.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000003 /* InnerTube.swift */; };
 		CC0000000000000000000004 /* KinetixServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000004 /* KinetixServer.swift */; };
+		CC0000000000000000000007 /* NativeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000008 /* NativeStore.swift */; };
+		CC0000000000000000000008 /* Cookies.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000009 /* Cookies.swift */; };
+		CC0000000000000000000009 /* VkClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000000A /* VkClient.swift */; };
+		CC000000000000000000000A /* YandexClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000000B /* YandexClient.swift */; };
 		CC0000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000005 /* Assets.xcassets */; };
 		CC0000000000000000000006 /* www in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000006 /* www */; };
 /* End PBXBuildFile section */
@@ -21,6 +25,10 @@
 		BB0000000000000000000002 /* WebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewController.swift; sourceTree = "<group>"; };
 		BB0000000000000000000003 /* InnerTube.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InnerTube.swift; sourceTree = "<group>"; };
 		BB0000000000000000000004 /* KinetixServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KinetixServer.swift; sourceTree = "<group>"; };
+		BB0000000000000000000008 /* NativeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeStore.swift; sourceTree = "<group>"; };
+		BB0000000000000000000009 /* Cookies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cookies.swift; sourceTree = "<group>"; };
+		BB000000000000000000000A /* VkClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VkClient.swift; sourceTree = "<group>"; };
+		BB000000000000000000000B /* YandexClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YandexClient.swift; sourceTree = "<group>"; };
 		BB0000000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BB0000000000000000000006 /* www */ = {isa = PBXFileReference; lastKnownFileType = folder; path = www; sourceTree = "<group>"; };
 		BB0000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -60,6 +68,10 @@
 				BB0000000000000000000002 /* WebViewController.swift */,
 				BB0000000000000000000003 /* InnerTube.swift */,
 				BB0000000000000000000004 /* KinetixServer.swift */,
+				BB0000000000000000000008 /* NativeStore.swift */,
+				BB0000000000000000000009 /* Cookies.swift */,
+				BB000000000000000000000A /* VkClient.swift */,
+				BB000000000000000000000B /* YandexClient.swift */,
 				BB0000000000000000000005 /* Assets.xcassets */,
 				BB0000000000000000000006 /* www */,
 				BB0000000000000000000007 /* Info.plist */,
@@ -142,6 +154,10 @@
 				CC0000000000000000000002 /* WebViewController.swift in Sources */,
 				CC0000000000000000000003 /* InnerTube.swift in Sources */,
 				CC0000000000000000000004 /* KinetixServer.swift in Sources */,
+				CC0000000000000000000007 /* NativeStore.swift in Sources */,
+				CC0000000000000000000008 /* Cookies.swift in Sources */,
+				CC0000000000000000000009 /* VkClient.swift in Sources */,
+				CC000000000000000000000A /* YandexClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

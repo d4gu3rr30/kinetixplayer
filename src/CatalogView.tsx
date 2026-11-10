@@ -290,7 +290,7 @@ export function CatalogView({ selected, loading, error, tracksCount, youtubeDl, 
             <span><Disc3 size={13}/>{loading ? 'Собираем треки…' : tracksCount ? `${tracksCount} треков` : 'Каталог готов'}</span>
             <span>{sourceLabel(source)}</span>
           </div>
-          <div className="catalog-hero-picker"><SourcePicker value={source} onChange={onSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl })} yandexFull={yandexFull} youtubeDl={youtubeDl} vkIssue={vkIssue} compact inline/></div>
+          <div className="catalog-hero-picker"><SourcePicker value={source} onChange={onSource} available={usableSources({ vkEnabled, vkIssue, youtubeDl, yandexEnabled: yandexFull })} yandexFull={yandexFull} youtubeDl={youtubeDl} vkIssue={vkIssue} compact inline/></div>
         </div>
         <div className="catalog-hero-actions">
           <button className="primary-btn catalog-play" onClick={onPlayAll} disabled={!tracksCount}><Play size={17} fill="currentColor"/> Слушать всё</button>
