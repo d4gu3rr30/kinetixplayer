@@ -32,6 +32,10 @@ html.is-ios .main-content {
   html.is-ios .mobile-nav {
     height: auto;
     min-height: calc(65px + env(safe-area-inset-bottom, 0px));
+    /* The base rule uses content-box: with the safe-area already inside
+       min-height, padding would be added twice and the bar would grow
+       under the mini player. */
+    box-sizing: border-box;
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
