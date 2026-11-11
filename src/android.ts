@@ -38,7 +38,7 @@ type DeezerArtist = { id: number; name: string; picture_xl?: string; picture_big
 
 declare global {
   interface Window {
-    kinetixAndroid?: { saveFile?: (name: string, mime: string, base64: string) => string }
+    kinetixAndroid?: { saveFile?: (name: string, mime: string, base64: string) => string; nowPlaying?: (payload: string) => void }
     __kinetixAndroidBack?: () => boolean
   }
 }

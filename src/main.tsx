@@ -101,6 +101,7 @@ function pushNowPlaying(track: NowPlayingTrack | null, playing: boolean, duratio
     ? { action: 'update', title: track.title, artist: track.artist || 'Kinetix', artwork: track.artwork || '', duration: Math.max(0, duration || track.duration || 0), elapsed: Math.max(0, elapsed), rate: playing ? 1 : 0 }
     : { action: 'clear' }
   try { window.kinetixNow?.update(payload) } catch { /* The native bridge is absent in a browser. */ }
+  try { window.kinetixAndroid?.nowPlaying?.(JSON.stringify(payload)) } catch { /* The Android bridge is absent in a browser. */ }
   if (!('mediaSession' in navigator)) return
   const session = navigator.mediaSession
   if (!track) { session.metadata = null; session.playbackState = 'none'; return }

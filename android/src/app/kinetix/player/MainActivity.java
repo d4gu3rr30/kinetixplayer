@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
@@ -34,6 +35,7 @@ import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private static final int FILE_REQUEST = 41;
+    private static final int NOTIFICATION_REQUEST = 43;
     private static final String HOME = "#08080C";
 
     private WebView webView;
@@ -120,6 +122,12 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.addJavascriptInterface(new Bridge(), "kinetixAndroid");
+        PlaybackService.setRemoteListener((action, value) -> runOnUiThread(() -> {
+            if (webView == null) return;
+            String argument = value == null ? "" : ", " + value;
+            webView.evaluateJavascript("window.__kinetixRemote&&window.__kinetixRemote(\"" + action + "\"" + argument + ")", null);
+        }));
+        requestNotificationPermission();
         PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
         if (power != null) {
             wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kinetix:playback");
@@ -141,6 +149,11 @@ public final class MainActivity extends Activity {
 
     /** Exposed to the web app as window.kinetixAndroid. */
     private final class Bridge {
+        @JavascriptInterface
+        public void nowPlaying(String payload) {
+            PlaybackService.publish(getApplicationContext(), payload);
+        }
+
         @JavascriptInterface
         public boolean saveFile(String name, String mime, String base64) {
             if (base64 == null || base64.isEmpty()) return false;
@@ -200,6 +213,12 @@ public final class MainActivity extends Activity {
         } catch (Exception error) {
             return false;
         }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_REQUEST);
     }
 
     private boolean openExternally(Uri uri) {
@@ -293,6 +312,8 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        PlaybackService.setRemoteListener(null);
+        PlaybackService.stop(this);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (webView != null) {
