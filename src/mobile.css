@@ -144,6 +144,15 @@
 @keyframes toast-top-in { from { opacity: 0; transform: translateY(-22px) scale(.97) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes toast-top-out { from { opacity: 1; transform: translateY(0) scale(1) } to { opacity: 0; transform: translateY(-16px) scale(.98) } }
 
+/* Swipe-down to collapse: the drag zones must not start a native scroll. */
+@media (max-width: 680px) {
+  .mobile-player-overlay .overlay-header,
+  .mobile-player-overlay .overlay-art,
+  .mobile-player-overlay .overlay-title { touch-action: pan-x; }
+  .overlay-grabber { width: 46px; height: 4px; border-radius: 999px; background: #ffffff2e; margin: -6px auto 8px; flex: none; }
+}
+.mobile-player-overlay.lyrics-full .overlay-grabber { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop, .auth-modal, .moment-modal, .pl-editor, .pk-modal, .view-stage,
   .mobile-player-overlay, .toast, .toast-leaving,

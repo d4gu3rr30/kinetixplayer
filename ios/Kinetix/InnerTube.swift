@@ -140,15 +140,33 @@ final class InnerTube {
         let now = Date()
         if let cached = cached, cached.expires > now { return cached }
 
-        var payload = basePayload()
-        payload["videoId"] = videoId
-        payload["contentCheckOk"] = true
-        payload["racyCheckOk"] = true
-        let response = try post("player", payload)
+        let hasCookies: Bool = {
+            lock.lock()
+            defer { lock.unlock() }
+            return !cookieHeader.isEmpty
+        }()
 
-        let status = response["playabilityStatus"] as? [String: Any]
-        let state = status?["status"] as? String ?? ""
+        var response: [String: Any]
+        var state: String
+        do {
+            response = try player(videoId, authenticated: true)
+            state = playabilityState(response)
+        } catch {
+            guard hasCookies else { throw error }
+            response = try player(videoId, authenticated: false)
+            state = playabilityState(response)
+        }
+        // A stale signed-in cookie makes YouTube answer LOGIN_REQUIRED for every
+        // track. The anonymous request is the fallback that keeps the wave alive.
+        if state != "OK", hasCookies, let fallback = try? player(videoId, authenticated: false) {
+            let fallbackState = playabilityState(fallback)
+            if fallbackState == "OK" {
+                response = fallback
+                state = fallbackState
+            }
+        }
         if state != "OK" {
+            let status = response["playabilityStatus"] as? [String: Any]
             let reason = (status?["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if state == "LOGIN_REQUIRED" {
                 throw KinetixError("YouTube просит войти в аккаунт для этого трека — включи другой, он заиграет")
@@ -227,7 +245,20 @@ final class InnerTube {
         return ["context": ["client": client]]
     }
 
-    private func post(_ endpoint: String, _ payload: [String: Any]) throws -> [String: Any] {
+    private func player(_ videoId: String, authenticated: Bool) throws -> [String: Any] {
+        var payload = basePayload()
+        payload["videoId"] = videoId
+        payload["contentCheckOk"] = true
+        payload["racyCheckOk"] = true
+        return try post("player", payload, authenticated: authenticated)
+    }
+
+    private func playabilityState(_ response: [String: Any]) -> String {
+        let status = response["playabilityStatus"] as? [String: Any]
+        return status?["status"] as? String ?? ""
+    }
+
+    private func post(_ endpoint: String, _ payload: [String: Any], authenticated: Bool = true) throws -> [String: Any] {
         guard let url = URL(string: "https://www.youtube.com/youtubei/v1/\(endpoint)?prettyPrint=false") else {
             throw KinetixError("Некорректный адрес YouTube")
         }
@@ -240,7 +271,7 @@ final class InnerTube {
         request.setValue("28", forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         lock.lock()
-        let cookies = cookieHeader
+        let cookies = authenticated ? cookieHeader : ""
         lock.unlock()
         if !cookies.isEmpty {
             let safe = cookies.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")

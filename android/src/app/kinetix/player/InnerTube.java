@@ -142,16 +142,30 @@ final class InnerTube {
     static Stream resolve(String videoId) throws IOException {        Stream cached = STREAMS.get(videoId);
         long now = System.currentTimeMillis();
         if (cached != null && cached.expires > now) return cached;
-        JSONObject payload = basePayload();
+        boolean hasCookies = !cookieHeader.isEmpty();
+        JSONObject response;
+        String state;
         try {
-            payload.put("videoId", videoId);
-            payload.put("contentCheckOk", true);
-            payload.put("racyCheckOk", true);
-        } catch (JSONException ignored) {
+            response = player(videoId, true);
+            state = stateOf(response);
+        } catch (IOException error) {
+            if (!hasCookies) throw error;
+            response = player(videoId, false);
+            state = stateOf(response);
         }
-        JSONObject response = post("player", payload);
+        // Stale signed-in cookies make YouTube answer LOGIN_REQUIRED for every
+        // track. Anonymous playback is the fallback that keeps the wave alive.
+        if (!"OK".equals(state) && hasCookies) {
+            try {
+                JSONObject fallback = player(videoId, false);
+                if ("OK".equals(stateOf(fallback))) {
+                    response = fallback;
+                    state = "OK";
+                }
+            } catch (IOException ignored) {
+            }
+        }
         JSONObject status = response.optJSONObject("playabilityStatus");
-        String state = status == null ? "" : status.optString("status", "");
         if (!"OK".equals(state)) {
             String reason = status == null ? "" : status.optString("reason", "").trim();
             if ("LOGIN_REQUIRED".equals(state)) {
@@ -239,17 +253,37 @@ final class InnerTube {
         return payload;
     }
 
+    private static JSONObject player(String videoId, boolean withCookies) throws IOException {
+        JSONObject payload = basePayload();
+        try {
+            payload.put("videoId", videoId);
+            payload.put("contentCheckOk", true);
+            payload.put("racyCheckOk", true);
+        } catch (JSONException ignored) {
+        }
+        return post("player", payload, withCookies);
+    }
+
+    private static String stateOf(JSONObject response) {
+        JSONObject status = response.optJSONObject("playabilityStatus");
+        return status == null ? "" : status.optString("status", "");
+    }
+
     private static final String[] HOSTS = {"www.youtube.com", "youtubei.googleapis.com"};
     private static final int CONNECT_TIMEOUT = 6_000;
     private static final int READ_TIMEOUT = 8_000;
 
     private static JSONObject post(String endpoint, JSONObject payload) throws IOException {
+        return post(endpoint, payload, true);
+    }
+
+    private static JSONObject post(String endpoint, JSONObject payload, boolean withCookies) throws IOException {
         byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
         String path = "/youtubei/v1/" + endpoint + "?prettyPrint=false";
         IOException last = null;
         for (String host : HOSTS) {
             try {
-                String text = exchange(host, path, body);
+                String text = exchange(host, path, body, withCookies);
                 return new JSONObject(text);
             } catch (JSONException error) {
                 throw new IOException("YouTube вернул непонятный ответ", error);
@@ -263,7 +297,7 @@ final class InnerTube {
         throw last == null ? new IOException("YouTube недоступен") : last;
     }
 
-    private static String exchange(String host, String path, byte[] body) throws IOException {
+    private static String exchange(String host, String path, byte[] body, boolean withCookies) throws IOException {
         Socket raw = new Socket();
         SSLSocket tls = null;
         try {
@@ -284,7 +318,7 @@ final class InnerTube {
             head.append("Origin: https://www.youtube.com\r\n");
             head.append("X-YouTube-Client-Name: 28\r\n");
             head.append("X-YouTube-Client-Version: ").append(CLIENT_VERSION).append("\r\n");
-            String cookies = cookieHeader;
+            String cookies = withCookies ? cookieHeader : "";
             if (!cookies.isEmpty()) {
                 head.append("Cookie: ").append(cookies.replace("\r", "").replace("\n", "")).append("\r\n");
                 head.append("X-Goog-AuthUser: 0\r\n");

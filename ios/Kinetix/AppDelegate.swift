@@ -10,6 +10,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [])
         try? session.setActive(true)
+        UIApplication.shared.beginReceivingRemoteControlEvents()
 
         InnerTube.shared.setCookies(NativeStore.shared.cookies)
 

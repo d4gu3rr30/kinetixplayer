@@ -54,7 +54,7 @@ import './windowbar.css'
 type Lyric = { at: number; text: string }
 type View = 'home' | 'search' | 'library' | 'favorites' | 'offline' | 'profile' | 'genre' | 'catalog' | 'playlists' | 'recommendations' | 'artist' | 'settings'
 type SCWidget = { bind: (event: string, cb: (data?: { currentPosition?: number; duration?: number }) => void) => void; play: () => void; pause: () => void; seekTo: (ms: number) => void; setVolume: (volume: number) => void; getDuration: (cb: (ms: number) => void) => void }
-declare global { interface Window { SC?: { Widget: ((frame: HTMLIFrameElement) => SCWidget) & { Events: Record<string, string> } } } }
+declare global { interface Window { SC?: { Widget: ((frame: HTMLIFrameElement) => SCWidget) & { Events: Record<string, string> } }; kinetixNow?: { update: (payload: Record<string, unknown>) => void }; __kinetixRemote?: (action: string, value?: number) => void } }
 
 const FAVORITES_KEY = 'kinetix:favorites:v1'
 const MEDIA_KEY = 'kinetix:media-library:v1'
@@ -95,6 +95,27 @@ function readDuration(audio: HTMLAudioElement): number {
   return 0
 }
 const artStyle = (track: Track, index = 0): React.CSSProperties => track.artwork ? { backgroundImage: `url("${track.artwork.replace(/"/g, '')}")` } : { background: ['linear-gradient(145deg,#e3a27a,#775877 65%,#322b48)','linear-gradient(145deg,#4d827e,#263c5b 65%,#181d38)','linear-gradient(145deg,#8c789d,#483e70 65%,#25243b)'][index % 3] }
+type NowPlayingTrack = Pick<Track, 'title' | 'artist' | 'artwork' | 'duration'>
+function pushNowPlaying(track: NowPlayingTrack | null, playing: boolean, duration: number, elapsed: number) {
+  const payload = track
+    ? { action: 'update', title: track.title, artist: track.artist || 'Kinetix', artwork: track.artwork || '', duration: Math.max(0, duration || track.duration || 0), elapsed: Math.max(0, elapsed), rate: playing ? 1 : 0 }
+    : { action: 'clear' }
+  try { window.kinetixNow?.update(payload) } catch { /* The native bridge is absent in a browser. */ }
+  if (!('mediaSession' in navigator)) return
+  const session = navigator.mediaSession
+  if (!track) { session.metadata = null; session.playbackState = 'none'; return }
+  try {
+    session.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.artist || 'Kinetix',
+      album: 'Kinetix',
+      artwork: track.artwork ? [{ src: track.artwork, sizes: '480x360', type: 'image/jpeg' }] : [],
+    })
+    session.playbackState = playing ? 'playing' : 'paused'
+    const total = Math.max(0, duration || track.duration || 0)
+    if (total > 1) session.setPositionState({ duration: total, position: Math.min(Math.max(0, elapsed), total - .25), playbackRate: 1 })
+  } catch { /* Media Session is an optional progressive enhancement. */ }
+}
 const parseLrc = (input: string): Lyric[] => input.split(/\r?\n/).flatMap(line => { const match = line.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return match ? [{ at: Number(match[1]) * 60 + Number(match[2]), text: match[3].trim() }] : [] }).sort((a, b) => a.at - b.at)
 function trackFromMoment(moment: Moment): Track | null {
   const id = moment.track.id || ''
@@ -445,6 +466,9 @@ function App() {
   const folderRef = useRef<HTMLInputElement>(null)
   const objectUrlRef = useRef<string | null>(null)
   const errorRetries = useRef(0)
+  const autoSkipGuard = useRef({ count: 0, at: 0 })
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const overlaySwipe = useRef<{ pointerId: number; startX: number; startY: number; dy: number; active: boolean; startedAt: number } | null>(null)
   const recommendFresh = useRef(false)
   const waveLoading = useRef(false)
   const waveCooldown = useRef(0)
@@ -716,6 +740,34 @@ function App() {
   useEffect(() => { setMomentLines([]); setSelectingMoment(false) }, [current?.id])
   useEffect(() => { errorRetries.current = 0; setBuffering(Boolean(current && current.source !== 'soundcloud' && current.source !== 'local')) }, [current?.id])
   useEffect(() => {
+    if (!current) { pushNowPlaying(null, false, 0, 0); return }
+    pushNowPlaying(current, playing, duration, positionRef.current)
+  }, [current?.id, current?.title, current?.artist, current?.artwork, current?.duration, playing, duration])
+  useEffect(() => {
+    window.__kinetixRemote = (action, value) => {
+      if (action === 'play') { if (!playing) setPlaying(true); return }
+      if (action === 'pause') { if (playing) setPlaying(false); return }
+      if (action === 'toggle') { setPlaying(!playing); return }
+      if (action === 'next') { skip(1); return }
+      if (action === 'previous') { skip(-1); return }
+      if (action === 'seek' && Number.isFinite(value) && current) { seek(value as number); requestSeek(current, value as number, 12000) }
+    }
+    return () => { delete window.__kinetixRemote }
+  })
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const session = navigator.mediaSession
+    const actions: [MediaSessionAction, string][] = [['play', 'play'], ['pause', 'pause'], ['nexttrack', 'next'], ['previoustrack', 'previous'], ['stop', 'pause']]
+    for (const [name, action] of actions) {
+      try { session.setActionHandler(name, () => window.__kinetixRemote?.(action)) } catch { /* This action is unsupported here. */ }
+    }
+    try { session.setActionHandler('seekto', details => { if (typeof details.seekTime === 'number') window.__kinetixRemote?.('seek', details.seekTime) }) } catch { /* This action is unsupported here. */ }
+    return () => {
+      for (const [name] of actions) { try { session.setActionHandler(name, null) } catch { /* Already detached. */ } }
+      try { session.setActionHandler('seekto', null) } catch { /* Already detached. */ }
+    }
+  }, [])
+  useEffect(() => {
     if (!genre || view !== 'genre') return
     const controller = new AbortController()
     const base = new URLSearchParams({ genre: genre.id, source: 'local' })
@@ -959,9 +1011,18 @@ function App() {
       return
     }
     if (settings.autoplaySimilar && queue.length > 1) {
+      const now = Date.now()
+      if (now - autoSkipGuard.current.at > 45000) autoSkipGuard.current.count = 0
+      if (autoSkipGuard.current.count >= 2) {
+        setBuffering(false)
+        setPlaying(false)
+        setNotice('YouTube не отдаёт поток — включите VPN или выберите трек из Яндекс Музыки')
+        return
+      }
       const index = queue.findIndex(track => track.id === current.id)
       const next = queue[index >= 0 ? (index + 1) % queue.length : 0]
       if (next && next.id !== current.id) {
+        autoSkipGuard.current = { count: autoSkipGuard.current.count + 1, at: now }
         setBuffering(false)
         setNotice(`«${current.title}» недоступен — волна идёт дальше`)
         skip(1)
@@ -1033,7 +1094,7 @@ function App() {
     if (known > 0) setDuration(known)
   }
   function togglePlay() { if (!current) return; if (current.source === 'soundcloud') { playing ? widgetRef.current?.pause() : widgetRef.current?.play() } else { if (!playing && audioRef.current && audioRef.current.volume < .01 && !fadeTimer.current) rampVolume(volume / 100, .4); setPlaying(!playing) } }
-  function seek(value: number) { applyPlayhead(value, true); soundCloudClock.current = { position: value, at: performance.now() }; current?.source === 'soundcloud' ? widgetRef.current?.seekTo(value * 1000) : audioRef.current && (audioRef.current.currentTime = value) }
+  function seek(value: number) { applyPlayhead(value, true); soundCloudClock.current = { position: value, at: performance.now() }; current?.source === 'soundcloud' ? widgetRef.current?.seekTo(value * 1000) : audioRef.current && (audioRef.current.currentTime = value); if (current) pushNowPlaying(current, playing, durationRef.current, value) }
   function toggleFavorite(track: Track) { const exists = favorites.some(t => t.id === track.id); setFavorites(exists ? favorites.filter(t => t.id !== track.id) : [track, ...favorites]); setNotice(exists ? 'Убрано из любимых' : 'Добавлено в любимые') }
   function toggleLibrary(track: Track) { const exists = mediaLibrary.some(t => t.id === track.id); setMediaLibrary(exists ? mediaLibrary.filter(t => t.id !== track.id) : [track, ...mediaLibrary]); setNotice(exists ? 'Убрано из медиатеки' : 'Добавлено в медиатеку') }
   async function importUrl(value: string) { const url = value.trim(); if (!/^https:\/\/(www\.|m\.)?soundcloud\.com\//i.test(url)) { setNotice('Вставьте ссылку на публичный трек'); return } setLoading(true); try { const response = await fetch(`https://soundcloud.com/oembed?format=json&url=${encodeURIComponent(url)}`); if (!response.ok) throw new Error('Трек не найден'); const data = await response.json(); const titleParts = String(data.title || 'Внешний трек').split(' by '); const track: Track = { id: `sc:${url}`, title: titleParts[0], artist: titleParts.slice(1).join(' by ') || 'Внешний источник', artwork: data.thumbnail_url, url, source: 'soundcloud' }; setMediaLibrary(prev => prev.some(t => t.id === track.id) ? prev : [track, ...prev]); select(track); setQuery(''); setNotice('Трек добавлен') } catch { setNotice('Не удалось загрузить трек. Проверьте ссылку и доступность.') } finally { setLoading(false) } }
@@ -1223,6 +1284,48 @@ function App() {
       miniSwipeTimer.current = setTimeout(() => { miniSwipeSuppress.current = false }, 340)
     }, 150)
   }
+  function beginOverlaySwipe(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse') return
+    if ((event.target as HTMLElement).closest('button, a, input, label, .overlay-lyrics, .overlay-progress, .overlay-controls, .player-menu')) return
+    overlaySwipe.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dy: 0, active: false, startedAt: performance.now() }
+  }
+  function moveOverlaySwipe(event: React.PointerEvent<HTMLDivElement>) {
+    const state = overlaySwipe.current
+    if (!state || state.pointerId !== event.pointerId) return
+    const dy = event.clientY - state.startY
+    const dx = event.clientX - state.startX
+    if (!state.active) {
+      if (dy < 10 || Math.abs(dy) < Math.abs(dx) * 1.1) return
+      state.active = true
+      const el = overlayRef.current
+      if (el) el.style.transition = 'none'
+      try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* Pointer capture is a progressive enhancement. */ }
+    }
+    state.dy = Math.max(0, dy)
+    const el = overlayRef.current
+    if (!el) return
+    el.style.translate = `0 ${state.dy}px`
+    el.style.scale = String(Math.max(.94, 1 - state.dy / 2400))
+  }
+  function endOverlaySwipe(event: React.PointerEvent<HTMLDivElement>) {
+    const state = overlaySwipe.current
+    if (!state || state.pointerId !== event.pointerId) return
+    overlaySwipe.current = null
+    const el = overlayRef.current
+    if (!state.active || !el) return
+    const elapsed = Math.max(1, performance.now() - state.startedAt)
+    const collapse = state.dy > 120 || (state.dy > 60 && state.dy / elapsed > .6)
+    el.style.transition = 'translate .24s cubic-bezier(.22,.8,.28,1), scale .24s ease'
+    if (collapse) {
+      el.style.translate = '0 108vh'
+      el.style.scale = '.9'
+      window.setTimeout(() => setPlayerOpen(false), 170)
+      return
+    }
+    el.style.translate = '0 0px'
+    el.style.scale = ''
+    window.setTimeout(() => { if (overlayRef.current) { overlayRef.current.style.transition = ''; overlayRef.current.style.translate = '' } }, 260)
+  }
   const waveKey = (track: Track) => `${track.artist}|${track.title}`
     .toLocaleLowerCase()
     .replace(/[([].*?[)\]]/g, ' ')
@@ -1290,6 +1393,7 @@ function App() {
     }
   }
   function handlePlaying() {
+    autoSkipGuard.current = { count: 0, at: 0 }
     setBuffering(false)
     if (audioRef.current) applyPendingSeek(audioRef.current)
     if (fadeInPending.current) {
@@ -1784,7 +1888,7 @@ function App() {
     <nav className="mobile-nav"><button className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}><House size={21}/>Главная</button><button className={view === 'search' ? 'active' : ''} onClick={() => setView('search')}><Search size={21}/>Поиск</button><button className={view === 'catalog' ? 'active' : ''} onClick={openCatalog}><Flame size={21}/>Каталоги</button><button className={view === 'library' || view === 'playlists' || view === 'offline' ? 'active' : ''} onClick={() => setView('library')}><Library size={21}/>Медиатека</button><button className={view === 'profile' ? 'active' : ''} onClick={() => user ? setView('profile') : setAuthOpen(true)}><UserRound size={21}/>Профиль</button></nav>
     {current?.source === 'soundcloud' && <div className="sc-widget"><iframe ref={frameRef} title="Внешний плеер" allow="autoplay" src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(current.url || '')}&color=%23d7ff57&auto_play=true&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false`}/></div>}
     {current && current.source !== 'soundcloud' && <audio ref={audioRef} crossOrigin="anonymous" src={current.source === 'local' ? objectUrlRef.current || undefined : current.streamUrl} onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleLoadedMetadata} onDurationChange={handleDurationChange} onProgress={handleProgress} onLoadStart={() => setBuffering(true)} onWaiting={() => setBuffering(true)} onCanPlay={handleCanPlay} onPlaying={handlePlaying} onEnded={() => { if (loop) { audioRef.current!.currentTime = 0; audioRef.current!.play() } else if (queue.length > 1) skip(1); else if (settings.autoplaySimilar) autoplaySimilar().then(started => { if (!started) setPlaying(false) }); else setPlaying(false) }} onError={handleAudioError}/ >}
-    <Presence open={playerOpen && Boolean(current)}>{playerOpen && current && <div className={`mobile-player-overlay ${mobileLyricsFull ? 'lyrics-full' : ''}`}><div className="overlay-header"><button className="overlay-close" onClick={() => setPlayerOpen(false)}><ChevronDown size={25}/> СЕЙЧАС ИГРАЕТ</button><div className="overlay-head-actions"><button className="overlay-settings" onClick={() => setQueueOpen(true)} aria-label="Очередь и история"><ListOrdered size={20}/></button><button className="overlay-settings" onClick={openSettings} aria-label="Настройки приложения"><Settings2 size={20}/></button><div className="player-menu-wrap overlay-menu-wrap" ref={overlayMenuRef}><button className={`overlay-settings ${mobileMenu === 'overlay' ? 'is-open' : ''}`} onClick={() => setMobileMenu(mobileMenu === 'overlay' ? null : 'overlay')} aria-label="Ещё действия" aria-haspopup="menu" aria-expanded={mobileMenu === 'overlay'}><MoreHorizontal size={20}/></button>{mobileMenu === 'overlay' && <div className="player-menu overlay-player-menu" role="menu">{playerMenuContent(() => setMobileMenu(null))}</div>}</div></div></div><div className="overlay-art" style={artStyle(current)}/><div className="overlay-title"><div><h2>{current.title}</h2><button className={`overlay-artist ${buffering ? 'is-buffering' : ''}`} onClick={() => openArtist({ name: current.artist })}>{current.artist}</button></div><div className="overlay-title-actions"><button onClick={() => toggleLibrary(current)} aria-label={mediaLibrary.some(t => t.id === current.id) ? 'Убрать из медиатеки' : 'Добавить в медиатеку'}>{mediaLibrary.some(t => t.id === current.id) ? <Check size={20}/> : <Plus size={20}/>}</button><button onClick={() => toggleFavorite(current)} aria-label={favorites.some(t => t.id === current.id) ? 'Убрать из любимых' : 'Добавить в любимые'}><Heart fill={favorites.some(t => t.id === current.id) ? 'currentColor' : 'none'}/></button><button onClick={() => setPlaylistPickerTrack(current)} aria-label="Добавить в плейлист"><ListMusic size={20}/></button></div></div><div className="overlay-progress"><input ref={overlaySeekInputRef} type="range" min="0" max={Math.max(duration, 1)} defaultValue={0} onChange={e => { const value = Number(e.target.value); seekDraftRef.current = value; paintSeek(e.currentTarget, value, false); setSeekDraft(value) }} onPointerUp={e => { seek(Number(e.currentTarget.value)); seekDraftRef.current = null; setSeekDraft(null) }} onPointerCancel={endSeek} onKeyUp={e => { seek(Number(e.currentTarget.value)); seekDraftRef.current = null; setSeekDraft(null) }} onBlur={endSeek}/><div><span>{formatTime(position)}</span><span>{duration > 0 ? formatTime(duration) : '—:—'}</span></div></div><div className="overlay-controls"><button onClick={() => skip(-1)}><SkipBack fill="currentColor"/></button><button className="overlay-play" onClick={togglePlay}>{buffering ? <Loader2 className="spin"/> : playing ? <Pause fill="currentColor"/> : <Play fill="currentColor"/>}</button><button onClick={() => skip(1)}><SkipForward fill="currentColor"/></button></div>{current.source === 'youtube' && current.url && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть на YouTube</a>}{current.source === 'yandex' && current.url && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть в Яндекс Музыке{apiConfig.yandexFull ? '' : ' · здесь превью 30 с'}</a>}{current.source === 'soundcloud' && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть источник</a>}{current.source === 'archive' && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Запись и лицензия на Archive.org</a>}{video && current.source !== 'youtube' && <a className="overlay-video" href={video} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Смотреть клип</a>}<div className="overlay-lyrics"><div className="overlay-lyrics-head"><strong><ListMusic size={17}/> Текст песни</strong><div className="overlay-lyrics-actions">{availableMomentLines.length > 0 && <button className="overlay-moment" onClick={() => openMomentDialog()} aria-label="Сохранить Момент" title="Сохранить Момент"><Bookmark size={17}/><span>Момент</span></button>}{(lyrics.length > 0 || Boolean(plainLyrics)) && <button className="overlay-lyrics-toggle" onClick={() => setMobileLyricsFull(value => !value)} aria-label={mobileLyricsFull ? 'Свернуть текст' : 'Текст на весь экран'} title={mobileLyricsFull ? 'Свернуть текст' : 'Текст на весь экран'}>{mobileLyricsFull ? <Minimize2 size={17}/> : <Maximize2 size={17}/>}<span>{mobileLyricsFull ? 'Свернуть' : 'Весь текст'}</span></button>}</div></div><div className={lyrics.length ? 'is-synced' : undefined} ref={mobileLyricsScrollRef}>{lyrics.length ? lyrics.map((line, i) => <button data-line-index={i} className={activeLine === i ? 'active-line' : ''} key={i} onClick={() => seek(line.at)}>{line.text || '♪'}</button>) : plainLyrics ? <pre>{plainLyrics}</pre> : lyricsStatus}</div></div></div>}</Presence>
+    <Presence open={playerOpen && Boolean(current)}>{playerOpen && current && <div className={`mobile-player-overlay ${mobileLyricsFull ? 'lyrics-full' : ''}`} ref={overlayRef} onPointerDown={beginOverlaySwipe} onPointerMove={moveOverlaySwipe} onPointerUp={endOverlaySwipe} onPointerCancel={endOverlaySwipe}><div className="overlay-grabber" aria-hidden="true"/><div className="overlay-header"><button className="overlay-close" onClick={() => setPlayerOpen(false)}><ChevronDown size={25}/> СЕЙЧАС ИГРАЕТ</button><div className="overlay-head-actions"><button className="overlay-settings" onClick={() => setQueueOpen(true)} aria-label="Очередь и история"><ListOrdered size={20}/></button><button className="overlay-settings" onClick={openSettings} aria-label="Настройки приложения"><Settings2 size={20}/></button><div className="player-menu-wrap overlay-menu-wrap" ref={overlayMenuRef}><button className={`overlay-settings ${mobileMenu === 'overlay' ? 'is-open' : ''}`} onClick={() => setMobileMenu(mobileMenu === 'overlay' ? null : 'overlay')} aria-label="Ещё действия" aria-haspopup="menu" aria-expanded={mobileMenu === 'overlay'}><MoreHorizontal size={20}/></button>{mobileMenu === 'overlay' && <div className="player-menu overlay-player-menu" role="menu">{playerMenuContent(() => setMobileMenu(null))}</div>}</div></div></div><div className="overlay-art" style={artStyle(current)}/><div className="overlay-title"><div><h2>{current.title}</h2><button className={`overlay-artist ${buffering ? 'is-buffering' : ''}`} onClick={() => openArtist({ name: current.artist })}>{current.artist}</button></div><div className="overlay-title-actions"><button onClick={() => toggleLibrary(current)} aria-label={mediaLibrary.some(t => t.id === current.id) ? 'Убрать из медиатеки' : 'Добавить в медиатеку'}>{mediaLibrary.some(t => t.id === current.id) ? <Check size={20}/> : <Plus size={20}/>}</button><button onClick={() => toggleFavorite(current)} aria-label={favorites.some(t => t.id === current.id) ? 'Убрать из любимых' : 'Добавить в любимые'}><Heart fill={favorites.some(t => t.id === current.id) ? 'currentColor' : 'none'}/></button><button onClick={() => setPlaylistPickerTrack(current)} aria-label="Добавить в плейлист"><ListMusic size={20}/></button></div></div><div className="overlay-progress"><input ref={overlaySeekInputRef} type="range" min="0" max={Math.max(duration, 1)} defaultValue={0} onChange={e => { const value = Number(e.target.value); seekDraftRef.current = value; paintSeek(e.currentTarget, value, false); setSeekDraft(value) }} onPointerUp={e => { seek(Number(e.currentTarget.value)); seekDraftRef.current = null; setSeekDraft(null) }} onPointerCancel={endSeek} onKeyUp={e => { seek(Number(e.currentTarget.value)); seekDraftRef.current = null; setSeekDraft(null) }} onBlur={endSeek}/><div><span>{formatTime(position)}</span><span>{duration > 0 ? formatTime(duration) : '—:—'}</span></div></div><div className="overlay-controls"><button onClick={() => skip(-1)}><SkipBack fill="currentColor"/></button><button className="overlay-play" onClick={togglePlay}>{buffering ? <Loader2 className="spin"/> : playing ? <Pause fill="currentColor"/> : <Play fill="currentColor"/>}</button><button onClick={() => skip(1)}><SkipForward fill="currentColor"/></button></div>{current.source === 'youtube' && current.url && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть на YouTube</a>}{current.source === 'yandex' && current.url && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть в Яндекс Музыке{apiConfig.yandexFull ? '' : ' · здесь превью 30 с'}</a>}{current.source === 'soundcloud' && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Открыть источник</a>}{current.source === 'archive' && <a className="overlay-video" href={current.url} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Запись и лицензия на Archive.org</a>}{video && current.source !== 'youtube' && <a className="overlay-video" href={video} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Смотреть клип</a>}<div className="overlay-lyrics"><div className="overlay-lyrics-head"><strong><ListMusic size={17}/> Текст песни</strong><div className="overlay-lyrics-actions">{availableMomentLines.length > 0 && <button className="overlay-moment" onClick={() => openMomentDialog()} aria-label="Сохранить Момент" title="Сохранить Момент"><Bookmark size={17}/><span>Момент</span></button>}{(lyrics.length > 0 || Boolean(plainLyrics)) && <button className="overlay-lyrics-toggle" onClick={() => setMobileLyricsFull(value => !value)} aria-label={mobileLyricsFull ? 'Свернуть текст' : 'Текст на весь экран'} title={mobileLyricsFull ? 'Свернуть текст' : 'Текст на весь экран'}>{mobileLyricsFull ? <Minimize2 size={17}/> : <Maximize2 size={17}/>}<span>{mobileLyricsFull ? 'Свернуть' : 'Весь текст'}</span></button>}</div></div><div className={lyrics.length ? 'is-synced' : undefined} ref={mobileLyricsScrollRef}>{lyrics.length ? lyrics.map((line, i) => <button data-line-index={i} className={activeLine === i ? 'active-line' : ''} key={i} onClick={() => seek(line.at)}>{line.text || '♪'}</button>) : plainLyrics ? <pre>{plainLyrics}</pre> : lyricsStatus}</div></div></div>}</Presence>
     <input ref={fileRef} type="file" accept="audio/*" multiple hidden onChange={e => { addFiles(e.target.files); e.target.value = '' }}/>
     <input ref={folderRef} type="file" accept="audio/*" multiple hidden onChange={e => { addFiles(e.target.files, true); e.target.value = '' }}/>
     <Presence open={queueOpen}>{queueOpen && <QueuePanel current={current} queue={queue} history={history} library={mediaLibrary} favorites={favorites} playing={playing} onSelect={select} onRemove={removeFromQueue} onPlayNext={playNext} onRemoveHistory={removeHistory} onCommit={commitQueueOrder} onClearUpcoming={clearUpcoming} onClearHistory={() => setHistory([])} onLibrary={toggleLibrary} onFavorite={toggleFavorite} onPlaylist={track => { setQueueOpen(false); setPlaylistPickerTrack(track) }} onArtist={track => { setQueueOpen(false); openArtist({ name: track.artist }) }} onDislike={track => { setQueueOpen(false); markNotInterested(track) }} onClose={() => setQueueOpen(false)}/>}</Presence>

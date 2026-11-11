@@ -6,10 +6,12 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Message;
+import android.os.PowerManager;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.View;
@@ -37,6 +39,8 @@ public final class MainActivity extends Activity {
     private WebView webView;
     private KinetixServer server;
     private ValueCallback<Uri[]> fileCallback;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -116,6 +120,16 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.addJavascriptInterface(new Bridge(), "kinetixAndroid");
+        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+        if (power != null) {
+            wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kinetix:playback");
+            wakeLock.setReferenceCounted(false);
+        }
+        WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        if (wifi != null) {
+            wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "kinetix:playback");
+            wifiLock.setReferenceCounted(false);
+        }
         try {
             server = new KinetixServer(getApplicationContext());
             server.start();
@@ -259,7 +273,28 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+    }
+
+    @Override
+    protected void onStop() {
+        // Keep the CPU and Wi-Fi awake so buffered playback and the loopback
+        // server survive the screen turning off.
+        super.onStop();
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
+            if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (webView != null) {
             webView.loadUrl("about:blank");
             webView.destroy();

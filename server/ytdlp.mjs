@@ -221,7 +221,7 @@ async function resolveOnce(videoId, profile) {
     '--socket-timeout', '10',
     '--retries', '1',
     '--extractor-retries', '1',
-    ...authArgs(), ...profile.args,
+    ...(profile.anonymous ? [] : authArgs()), ...profile.args,
     '-j', `https://www.youtube.com/watch?v=${videoId}`,
   ]
   let output
@@ -264,6 +264,9 @@ export async function resolveYouTubeStream(videoId, urgent = false) {
     const profiles = [
       { args: ['--extractor-args', 'youtube:player_client=visionos'], timeout: 16000 },
       { args: [], timeout: 18000 },
+      // Stale signed-in cookies can make every request fail. A cookie-less
+      // attempt is the fallback that keeps the wave alive.
+      { args: [], timeout: 16000, anonymous: true },
       { args: ['--extractor-args', 'youtube:player_client=android_vr,web_safari'], timeout: 12000 },
     ]
     const order = [profiles[preferredProfile], ...profiles.filter((_, index) => index !== preferredProfile)]

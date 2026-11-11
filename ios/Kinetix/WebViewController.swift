@@ -21,6 +21,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.userContentController.add(self, name: "kinetixFile")
+        configuration.userContentController.add(self, name: "kinetixNow")
         configuration.userContentController.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         webView = WKWebView(frame: view.bounds, configuration: configuration)
@@ -33,6 +34,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
         view.addSubview(webView)
+        NowPlaying.shared.attach(webView)
 
         let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleBackSwipe(_:)))
         edge.edges = .left
@@ -63,6 +65,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     deinit {
         if let keyboardToken { NotificationCenter.default.removeObserver(keyboardToken) }
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "kinetixFile")
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "kinetixNow")
         server?.stop()
     }
 
@@ -71,6 +74,16 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
       saveFile: function (name, mime, base64) {
         try {
           window.webkit.messageHandlers.kinetixFile.postMessage({ name: String(name || ''), mime: String(mime || ''), data: String(base64 || '') })
+          return true
+        } catch (error) {
+          return false
+        }
+      }
+    }
+    window.kinetixNow = {
+      update: function (payload) {
+        try {
+          window.webkit.messageHandlers.kinetixNow.postMessage(payload || {})
           return true
         } catch (error) {
           return false
@@ -91,7 +104,12 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "kinetixFile", let body = message.body as? [String: Any] else { return }
+        guard let body = message.body as? [String: Any] else { return }
+        if message.name == "kinetixNow" {
+            NowPlaying.shared.handle(body)
+            return
+        }
+        guard message.name == "kinetixFile" else { return }
         guard let base64 = body["data"] as? String, !base64.isEmpty else { return }
         guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else { return }
         let target = FileManager.default.temporaryDirectory.appendingPathComponent(sanitizeName(body["name"] as? String))
