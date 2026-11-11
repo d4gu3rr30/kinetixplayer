@@ -1108,12 +1108,14 @@ function App() {
     const dead = Boolean(audio.error) || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
     if (dead && track && url) reloadStream(audio, track, url)
     audio.play().catch(() => {
-      // Safari will not restart an element whose transfer died, so hand it a
-      // fresh URL once instead of leaving the play button doing nothing.
+      // Safari rejects play() when a seek or a retry restarts the transfer even
+      // though the element keeps playing, so trust the element over the promise.
+      if (currentRef.current?.id !== track?.id) return
+      if (!audio.paused) { setPlaying(true); return }
       const recent = streamRecover.current.id === track?.id && Date.now() - streamRecover.current.at < 4000
       if (!track || !url || recent) { setPlaying(false); return }
       reloadStream(audio, track, url)
-      audio.play().catch(() => setPlaying(false))
+      audio.play().catch(() => { if (audio.paused) setPlaying(false) })
     })
   }
   function togglePlay() { if (!current) return; if (current.source === 'soundcloud') { playing ? widgetRef.current?.pause() : widgetRef.current?.play() } else { if (!playing && audioRef.current && audioRef.current.volume < .01 && !fadeTimer.current) rampVolume(volume / 100, .4); setPlaying(!playing) } }
@@ -1420,6 +1422,10 @@ function App() {
     }
   }
   function handlePlaying() {
+    // WebKit can resume a stream on its own after a system interruption or a
+    // rejected play() promise, so the element — not the optimistic state — is
+    // the source of truth for the button and for Now Playing.
+    setPlaying(true)
     autoSkipGuard.current = { count: 0, at: 0 }
     setBuffering(false)
     if (audioRef.current) applyPendingSeek(audioRef.current)

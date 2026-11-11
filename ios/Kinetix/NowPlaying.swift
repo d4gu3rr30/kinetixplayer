@@ -1,18 +1,18 @@
-import AVFoundation
 import MediaPlayer
 import UIKit
 import WebKit
 
 /// Bridges the web player to the system Now Playing panel: lock screen,
-/// Control Center and the Dynamic Island. A silent looping player keeps the
-/// app (and its in-process loopback server) alive while the screen is locked.
+/// Control Center and the Dynamic Island.
+///
+/// Playback itself belongs to WebKit and its background audio keeps the app
+/// alive. Running another AVAudioPlayer here would activate this process's
+/// audio session, and that activation interrupts WebKit's session — music
+/// pauses mid-track and resumes behind a JS state that still says "paused".
 final class NowPlaying: NSObject {
     static let shared = NowPlaying()
 
     private weak var webView: WKWebView?
-    private var keepAlive: AVAudioPlayer?
-    private var active = false
-    private var interrupted = false
     private var artworkKey = ""
     private var artworkCache: [String: MPMediaItemArtwork] = [:]
     private var artworkTask: URLSessionDataTask?
@@ -41,7 +41,6 @@ final class NowPlaying: NSObject {
     private override init() {
         super.init()
         configureRemoteCommands()
-        NotificationCenter.default.addObserver(self, selector: #selector(handleInterruption(_:)), name: AVAudioSession.interruptionNotification, object: nil)
     }
 
     func attach(_ webView: WKWebView) {
@@ -71,9 +70,6 @@ final class NowPlaying: NSObject {
     }
 
     private func update(title: String, artist: String, artwork: String, duration: Double, elapsed: Double, rate: Double) {
-        active = true
-        if rate > 0 { startKeepAlive() } else { stopKeepAlive() }
-
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: title.isEmpty ? "Kinetix" : title,
             MPMediaItemPropertyArtist: artist.isEmpty ? "Kinetix" : artist,
@@ -94,11 +90,9 @@ final class NowPlaying: NSObject {
     }
 
     private func clear() {
-        active = false
         artworkKey = ""
         artworkTask?.cancel()
         artworkTask = nil
-        stopKeepAlive()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         if #available(iOS 13.0, *) {
             MPNowPlayingInfoCenter.default().playbackState = .stopped
@@ -127,49 +121,6 @@ final class NowPlaying: NSObject {
         }
         artworkTask?.resume()
         return placeholderArtwork
-    }
-
-    // MARK: - Background keep-alive
-
-    private func startKeepAlive() {
-        if keepAlive != nil { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: [])
-        try? session.setActive(true)
-        guard let player = try? AVAudioPlayer(data: Self.silence()) else { return }
-        player.numberOfLoops = -1
-        player.volume = 0
-        player.prepareToPlay()
-        player.play()
-        keepAlive = player
-    }
-
-    private func stopKeepAlive() {
-        keepAlive?.stop()
-        keepAlive = nil
-    }
-
-    private static func silence(seconds: Double = 2, sampleRate: UInt32 = 8000) -> Data {
-        let frames = UInt32(Double(sampleRate) * seconds)
-        let dataSize = frames * 2
-        var data = Data()
-        func put(_ value: UInt32) { var little = value.littleEndian; withUnsafeBytes(of: &little) { data.append(contentsOf: $0) } }
-        func putShort(_ value: UInt16) { var little = value.littleEndian; withUnsafeBytes(of: &little) { data.append(contentsOf: $0) } }
-        data.append(contentsOf: Array("RIFF".utf8))
-        put(36 + dataSize)
-        data.append(contentsOf: Array("WAVE".utf8))
-        data.append(contentsOf: Array("fmt ".utf8))
-        put(16)
-        putShort(1)
-        putShort(1)
-        put(sampleRate)
-        put(sampleRate * 2)
-        putShort(2)
-        putShort(16)
-        data.append(contentsOf: Array("data".utf8))
-        put(dataSize)
-        data.append(Data(count: Int(dataSize)))
-        return data
     }
 
     // MARK: - Remote commands
@@ -202,21 +153,5 @@ final class NowPlaying: NSObject {
                 ?? "window.__kinetixRemote&&window.__kinetixRemote('\(action)')"
             webView.evaluateJavaScript(call, completionHandler: nil)
         }
-    }
-
-    @objc private func handleInterruption(_ notification: Notification) {
-        guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
-        if type == .began {
-            guard active else { return }
-            interrupted = true
-            send("pause")
-            return
-        }
-        let options = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
-            .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
-        try? AVAudioSession.sharedInstance().setActive(true)
-        if interrupted, options.contains(.shouldResume) { send("play") }
-        interrupted = false
     }
 }
