@@ -467,6 +467,7 @@ function App() {
   const folderRef = useRef<HTMLInputElement>(null)
   const objectUrlRef = useRef<string | null>(null)
   const errorRetries = useRef(0)
+  const streamRecover = useRef({ id: '', at: 0 })
   const autoSkipGuard = useRef({ count: 0, at: 0 })
   const overlayRef = useRef<HTMLDivElement>(null)
   const overlaySwipe = useRef<{ pointerId: number; startX: number; startY: number; dy: number; active: boolean; startedAt: number } | null>(null)
@@ -868,7 +869,7 @@ function App() {
   }, [view, recommendMode, recommendSeeds, collectionNonce, recommendSource, dislikeKey])
   useEffect(() => { if (!user?.artists.length || !apiReady) { setFollowingTracks([]); return } const names = user.artists.map(artistById).filter((artist): artist is NonNullable<typeof artist> => Boolean(artist)).slice(0, 8).map(artist => artist.name); const controller = new AbortController(); fetch(`/api/following?artists=${encodeURIComponent(names.join(','))}`, { signal: controller.signal }).then(response => response.json()).then(result => { if (!controller.signal.aborted) setFollowingTracks(result.tracks || []) }).catch(() => {}); return () => controller.abort() }, [user?.artists.join(','), apiReady, dynamicArtistCount])
   useEffect(() => { if (!current || current.source !== 'soundcloud' || !frameRef.current || !window.SC) return; const widget = window.SC.Widget(frameRef.current); widgetRef.current = widget; const e = window.SC.Widget.Events; widget.bind(e.READY, () => { widget.setVolume(volume); widget.getDuration(ms => setDuration(ms / 1000)); const seekAt = soundCloudSeek.current; if (seekAt > 0) { soundCloudSeek.current = 0; widget.seekTo(seekAt * 1000); soundCloudClock.current = { position: seekAt, at: performance.now() }; applyPlayhead(seekAt, true) } if (playing) widget.play() }); widget.bind(e.PLAY, () => { soundCloudClock.current = { position: soundCloudClock.current.position, at: performance.now() }; setPlaying(true) }); widget.bind(e.PAUSE, () => setPlaying(false)); widget.bind(e.FINISH, () => { setPlaying(false); if (loop) { widget.seekTo(0); widget.play() } else if (queue.length > 1) skip(1); else if (settings.autoplaySimilar) autoplaySimilar() }); widget.bind(e.PLAY_PROGRESS, data => { if (data?.currentPosition !== undefined) { soundCloudClock.current = { position: data.currentPosition / 1000, at: performance.now() }; applyPlayhead(data.currentPosition / 1000) } }); return () => { widgetRef.current = null } }, [current?.id, loop, settings.autoplaySimilar])
-  useEffect(() => { if (current?.source !== 'soundcloud' && audioRef.current) { if (!fadeTimer.current && !fadeInPending.current) audioRef.current.volume = volume / 100; if (playing) audioRef.current.play().catch(() => setPlaying(false)); else audioRef.current.pause() } else if (current?.source === 'soundcloud') { widgetRef.current?.setVolume(volume) } }, [playing, volume, current?.id])
+  useEffect(() => { const audio = audioRef.current; if (current?.source !== 'soundcloud' && audio) { if (!fadeTimer.current && !fadeInPending.current) audio.volume = volume / 100; if (playing) startAudio(audio); else audio.pause() } else if (current?.source === 'soundcloud') { widgetRef.current?.setVolume(volume) } }, [playing, volume, current?.id])
   useEffect(() => { if (!current) return; setLyrics([]); setPlainLyrics(''); setLyricsStatus('Ищем синхронный текст…'); setVideo(null); const controller = new AbortController(); const params = new URLSearchParams({ track_name: current.title, artist_name: current.artist }); if (current.fullDuration || current.duration) params.set('duration', String(Math.round(current.fullDuration || current.duration || 0))); fetch(`https://lrclib.net/api/get?${params}`, { headers: { 'Lrclib-Client': 'Kinetix/1.0 (local app)' }, signal: controller.signal }).then(async r => { if (!r.ok) throw new Error(String(r.status)); return r.json() }).then(data => { if (data.syncedLyrics) setLyrics(parseLrc(data.syncedLyrics)); else if (data.plainLyrics) setPlainLyrics(data.plainLyrics); else setLyricsStatus('Для этого трека текст пока не найден') }).catch(() => setLyricsStatus('Для этого трека текст пока не найден')); if (current.source === 'youtube') setVideo(current.url || null); else fetch(`/api/video?artist=${encodeURIComponent(current.artist)}&title=${encodeURIComponent(current.title)}`, { signal: controller.signal }).then(r => r.json()).then(data => setVideo(data.url || null)).catch(() => {}); return () => controller.abort() }, [current?.id])
   useEffect(() => {
     const text = query.trim()
@@ -1094,6 +1095,27 @@ function App() {
     const known = readDuration(event.currentTarget)
     if (known > 0) setDuration(known)
   }
+  function reloadStream(audio: HTMLAudioElement, track: Track, url: string) {
+    streamRecover.current = { id: track.id, at: Date.now() }
+    const resume = positionRef.current
+    audio.src = `${url}${url.includes('?') ? '&' : '?'}retry=${Date.now()}`
+    audio.load()
+    if (resume > 1) requestSeek(track, resume, 15000)
+  }
+  function startAudio(audio: HTMLAudioElement) {
+    const track = currentRef.current
+    const url = track?.streamUrl || ''
+    const dead = Boolean(audio.error) || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
+    if (dead && track && url) reloadStream(audio, track, url)
+    audio.play().catch(() => {
+      // Safari will not restart an element whose transfer died, so hand it a
+      // fresh URL once instead of leaving the play button doing nothing.
+      const recent = streamRecover.current.id === track?.id && Date.now() - streamRecover.current.at < 4000
+      if (!track || !url || recent) { setPlaying(false); return }
+      reloadStream(audio, track, url)
+      audio.play().catch(() => setPlaying(false))
+    })
+  }
   function togglePlay() { if (!current) return; if (current.source === 'soundcloud') { playing ? widgetRef.current?.pause() : widgetRef.current?.play() } else { if (!playing && audioRef.current && audioRef.current.volume < .01 && !fadeTimer.current) rampVolume(volume / 100, .4); setPlaying(!playing) } }
   function seek(value: number) { applyPlayhead(value, true); soundCloudClock.current = { position: value, at: performance.now() }; current?.source === 'soundcloud' ? widgetRef.current?.seekTo(value * 1000) : audioRef.current && (audioRef.current.currentTime = value); if (current) pushNowPlaying(current, playing, durationRef.current, value) }
   function toggleFavorite(track: Track) { const exists = favorites.some(t => t.id === track.id); setFavorites(exists ? favorites.filter(t => t.id !== track.id) : [track, ...favorites]); setNotice(exists ? 'Убрано из любимых' : 'Добавлено в любимые') }
@@ -1296,7 +1318,11 @@ function App() {
     const dy = event.clientY - state.startY
     const dx = event.clientX - state.startX
     if (!state.active) {
-      if (dy < 10 || Math.abs(dy) < Math.abs(dx) * 1.1) return
+      if (dy < 6) return
+      // Lock the gesture on the first real movement. A clearly sideways swipe
+      // still belongs to the carousels below, but a little drift must not kill
+      // the pull-down.
+      if (Math.abs(dx) > 24 && Math.abs(dx) > dy * 1.4) { overlaySwipe.current = null; return }
       state.active = true
       const el = overlayRef.current
       if (el) el.style.transition = 'none'
@@ -1315,7 +1341,7 @@ function App() {
     const el = overlayRef.current
     if (!state.active || !el) return
     const elapsed = Math.max(1, performance.now() - state.startedAt)
-    const collapse = state.dy > 120 || (state.dy > 60 && state.dy / elapsed > .6)
+    const collapse = state.dy > 96 || (state.dy > 48 && state.dy / elapsed > .45)
     el.style.transition = 'translate .24s cubic-bezier(.22,.8,.28,1), scale .24s ease'
     if (collapse) {
       el.style.translate = '0 108vh'

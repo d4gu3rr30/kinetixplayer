@@ -144,12 +144,24 @@
 @keyframes toast-top-in { from { opacity: 0; transform: translateY(-22px) scale(.97) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes toast-top-out { from { opacity: 1; transform: translateY(0) scale(1) } to { opacity: 0; transform: translateY(-16px) scale(.98) } }
 
-/* Swipe-down to collapse: the drag zones must not start a native scroll. */
+/* Swipe-down to collapse: the drag zones must not start a native scroll, and
+   the grabber needs its own generous hit area. */
 @media (max-width: 680px) {
   .mobile-player-overlay .overlay-header,
   .mobile-player-overlay .overlay-art,
-  .mobile-player-overlay .overlay-title { touch-action: pan-x; }
-  .overlay-grabber { width: 46px; height: 4px; border-radius: 999px; background: #ffffff2e; margin: -6px auto 8px; flex: none; }
+  .mobile-player-overlay .overlay-title,
+  .mobile-player-overlay .overlay-grabber { touch-action: none; }
+  .overlay-grabber {
+    width: 46px;
+    height: 4px;
+    padding: 12px 28px;
+    box-sizing: content-box;
+    background: #ffffff2e content-box;
+    border-radius: 999px;
+    margin: -10px auto 4px;
+    flex: none;
+    cursor: grab;
+  }
 }
 .mobile-player-overlay.lyrics-full .overlay-grabber { display: none; }
 

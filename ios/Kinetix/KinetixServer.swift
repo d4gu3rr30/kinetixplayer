@@ -339,9 +339,12 @@ final class KinetixServer {
         var upstream = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
         upstream.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         upstream.setValue("*/*", forHTTPHeaderField: "Accept")
-        if let range = range, !range.isEmpty { upstream.setValue(range, forHTTPHeaderField: "Range") }
+        // googlevideo/CDN throttle plain 200 downloads to a crawl; a byte range
+        // makes them stream at full speed even when the client sent no Range.
+        let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
+        upstream.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
 
-        let downloader = StreamDownloader(client: client, fallbackType: fallbackType)
+        let downloader = StreamDownloader(client: client, fallbackType: fallbackType, fullResponse: requestedRange == nil)
         downloader.run(upstream)
 
         if !downloader.headWritten {
@@ -361,9 +364,10 @@ final class KinetixServer {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
-        if let range = range, !range.isEmpty { request.setValue(range, forHTTPHeaderField: "Range") }
+        let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
+        request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
 
-        let downloader = StreamDownloader(client: client, fallbackType: stream.mime)
+        let downloader = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil)
         downloader.run(request)
 
         if !downloader.headWritten {
@@ -555,15 +559,17 @@ final class KinetixServer {
     private final class StreamDownloader: NSObject, URLSessionDataDelegate {
         private let client: Int32
         private let fallbackType: String
+        private let fullResponse: Bool
         private let semaphore = DispatchSemaphore(value: 0)
         private var session: URLSession?
         private(set) var status = 0
         private(set) var headWritten = false
         private(set) var detail = ""
 
-        init(client: Int32, fallbackType: String) {
+        init(client: Int32, fallbackType: String, fullResponse: Bool) {
             self.client = client
             self.fallbackType = fallbackType
+            self.fullResponse = fullResponse
         }
 
         func run(_ request: URLRequest) {
@@ -591,10 +597,13 @@ final class KinetixServer {
             }
             let type = http.value(forHTTPHeaderField: "Content-Type") ?? fallbackType
             let length = http.expectedContentLength
-            var head = "HTTP/1.1 \(status) \(KinetixServer.statusText(status))\r\n"
+            // The client asked for no range, so answer with a whole-file 200 even
+            // though the upstream request carried `Range: bytes=0-`.
+            let clientStatus = fullResponse ? 200 : status
+            var head = "HTTP/1.1 \(clientStatus) \(KinetixServer.statusText(clientStatus))\r\n"
             head += "Content-Type: \(type)\r\n"
             if length >= 0 { head += "Content-Length: \(length)\r\n" }
-            if let contentRange = http.value(forHTTPHeaderField: "Content-Range") {
+            if !fullResponse, let contentRange = http.value(forHTTPHeaderField: "Content-Range") {
                 head += "Content-Range: \(contentRange)\r\n"
             }
             head += "Accept-Ranges: bytes\r\nCache-Control: private, max-age=3600\r\nConnection: close\r\n\r\n"

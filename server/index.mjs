@@ -98,10 +98,15 @@ async function readJson(req) {
   }
   try { return Buffer.concat(chunks).toString('utf8') || '{}' } catch { throw new Error('Некорректный запрос') }
 }
-function proxyAudio(res, upstream, fallbackType, extra = {}) {
+// CDNs throttle plain 200 media downloads, so upstream is always asked for a
+// byte range. When the client did not send one we still answer with a 200 and
+// the whole file length, exactly as a non-range request expects.
+const upstreamRange = range => (range && String(range).trim()) || 'bytes=0-'
+function proxyAudio(res, upstream, fallbackType, extra = {}, fullResponse = false) {
   const headers = { 'content-type': upstream.headers.get('content-type') || fallbackType || 'audio/mpeg', 'accept-ranges': 'bytes', 'cache-control': 'private, no-store', ...extra }
-  for (const name of ['content-length', 'content-range']) { const value = upstream.headers.get(name); if (value) headers[name] = value }
-  res.writeHead(upstream.status, headers)
+  const names = fullResponse ? ['content-length'] : ['content-length', 'content-range']
+  for (const name of names) { const value = upstream.headers.get(name); if (value) headers[name] = value }
+  res.writeHead(fullResponse && upstream.status === 206 ? 200 : upstream.status, headers)
   if (!upstream.body) return res.end()
   Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res)
 }
@@ -460,9 +465,9 @@ async function api(req, res, url) {
     const videoId = url.searchParams.get('v') || ''
     if (!/^[\w-]{11}$/.test(videoId)) return json(res, 400, { error: 'Некорректный трек' })
     try {
-      const { response, type } = await youtubeStream(videoId, req.headers.range)
+      const { response, type } = await youtubeStream(videoId, upstreamRange(req.headers.range))
       if (!response.ok && response.status !== 206) { const detail = await response.text().catch(() => ''); return json(res, 502, { error: `YouTube не отдал поток (${response.status}) ${detail.slice(0, 100)}` }) }
-      proxyAudio(res, response, type)
+      proxyAudio(res, response, type, {}, !req.headers.range)
     } catch (error) { if (!res.headersSent) json(res, 502, { error: error.message }) }
     return
   }
@@ -470,18 +475,19 @@ async function api(req, res, url) {
     const trackId = (url.searchParams.get('id') || '').replace(/\D/g, '').slice(0, 20)
     if (!trackId) return json(res, 400, { error: 'Некорректный трек' })
     try {
-      const { response, entry } = await yandexStream(trackId, req.headers.range)
+      const { response, entry } = await yandexStream(trackId, upstreamRange(req.headers.range))
       if (!response.ok && response.status !== 206) return json(res, 502, { error: `Яндекс Музыка не отдала поток (${response.status})` })
-      proxyAudio(res, response, entry.type, entry.preview ? { 'x-kinetix-preview': '1' } : {})
+      proxyAudio(res, response, entry.type, entry.preview ? { 'x-kinetix-preview': '1' } : {}, !req.headers.range)
     } catch (error) { if (!res.headersSent) json(res, 502, { error: error.message }) }
     return
   }
   if (url.pathname === '/api/vk-stream') {
     try {
       const id = url.searchParams.get('id') || ''
-      const response = id ? await vkStreamById(id, req.headers.range) : await vkStream(url.searchParams.get('u'), req.headers.range)
+      const range = req.headers.range
+      const response = id ? await vkStreamById(id, upstreamRange(range)) : await vkStream(url.searchParams.get('u'), upstreamRange(range))
       if (!response.ok && response.status !== 206) return json(res, 502, { error: `ВКонтакте не отдал поток (${response.status})` })
-      proxyAudio(res, response, 'audio/mpeg')
+      proxyAudio(res, response, 'audio/mpeg', {}, !range)
     } catch (error) { if (!res.headersSent) json(res, 502, { error: error.message }) }
     return
   }

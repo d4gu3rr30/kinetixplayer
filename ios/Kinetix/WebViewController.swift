@@ -20,6 +20,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         configuration.allowsAirPlayForMediaPlayback = true
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.ignoresViewportScaleLimits = false
         configuration.userContentController.add(self, name: "kinetixFile")
         configuration.userContentController.add(self, name: "kinetixNow")
         configuration.userContentController.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -33,6 +34,12 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
+        // The player is a fixed app surface: pinch and double-tap zoom only
+        // break the layout, so the viewport stays at 1:1.
+        webView.scrollView.pinchGestureRecognizer?.isEnabled = false
+        webView.scrollView.bouncesZoom = false
+        webView.scrollView.minimumZoomScale = 1
+        webView.scrollView.maximumZoomScale = 1
         view.addSubview(webView)
         NowPlaying.shared.attach(webView)
 
@@ -90,6 +97,12 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         }
       }
     }
+    try {
+      var blockGesture = function (event) { event.preventDefault() }
+      document.addEventListener('gesturestart', blockGesture, { passive: false })
+      document.addEventListener('gesturechange', blockGesture, { passive: false })
+      document.addEventListener('touchmove', function (event) { if (event.touches.length > 1) event.preventDefault() }, { passive: false })
+    } catch (error) { }
     """
 
     @objc private func handleBackSwipe(_ recognizer: UIScreenEdgePanGestureRecognizer) {

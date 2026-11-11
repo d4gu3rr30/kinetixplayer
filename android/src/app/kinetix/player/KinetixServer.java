@@ -457,7 +457,10 @@ public final class KinetixServer {
             connection.setInstanceFollowRedirects(true);
             connection.setRequestProperty("User-Agent", userAgent);
             connection.setRequestProperty("Accept", "*/*");
-            if (range != null && !range.isEmpty()) connection.setRequestProperty("Range", range);
+            // CDNs throttle plain 200 downloads; a byte range keeps the stream fast
+            // even when the media element sends no Range header.
+            boolean fullResponse = range == null || range.isEmpty();
+            connection.setRequestProperty("Range", fullResponse ? "bytes=0-" : range);
             int code = connection.getResponseCode();
             if ((code == 403 || code == 404 || code == 410) && refresher != null) {
                 try {
@@ -476,11 +479,12 @@ public final class KinetixServer {
             if (type == null || type.isEmpty()) type = fallbackType;
             long length = connection.getContentLengthLong();
             String contentRange = connection.getHeaderField("Content-Range");
+            int clientCode = fullResponse ? 200 : code;
             StringBuilder head = new StringBuilder();
-            head.append("HTTP/1.1 ").append(code).append(' ').append(statusText(code)).append("\r\n");
+            head.append("HTTP/1.1 ").append(clientCode).append(' ').append(statusText(clientCode)).append("\r\n");
             head.append("Content-Type: ").append(type).append("\r\n");
             if (length >= 0) head.append("Content-Length: ").append(length).append("\r\n");
-            if (contentRange != null) head.append("Content-Range: ").append(contentRange).append("\r\n");
+            if (!fullResponse && contentRange != null) head.append("Content-Range: ").append(contentRange).append("\r\n");
             head.append("Accept-Ranges: bytes\r\n");
             head.append("Cache-Control: private, max-age=3600\r\n");
             head.append("Connection: close\r\n\r\n");
@@ -504,7 +508,8 @@ public final class KinetixServer {
             connection.setInstanceFollowRedirects(true);
             connection.setRequestProperty("User-Agent", UA);
             connection.setRequestProperty("Accept", "*/*");
-            if (range != null && !range.isEmpty()) connection.setRequestProperty("Range", range);
+            boolean fullResponse = range == null || range.isEmpty();
+            connection.setRequestProperty("Range", fullResponse ? "bytes=0-" : range);
             int code = connection.getResponseCode();
             if ((code == 403 || code == 410) && retry) {
                 InnerTube.forget(videoId);
@@ -520,11 +525,12 @@ public final class KinetixServer {
             if (type == null || type.isEmpty()) type = stream.mime;
             long length = connection.getContentLengthLong();
             String contentRange = connection.getHeaderField("Content-Range");
+            int clientCode = fullResponse ? 200 : code;
             StringBuilder head = new StringBuilder();
-            head.append("HTTP/1.1 ").append(code).append(' ').append(statusText(code)).append("\r\n");
+            head.append("HTTP/1.1 ").append(clientCode).append(' ').append(statusText(clientCode)).append("\r\n");
             head.append("Content-Type: ").append(type).append("\r\n");
             if (length >= 0) head.append("Content-Length: ").append(length).append("\r\n");
-            if (contentRange != null) head.append("Content-Range: ").append(contentRange).append("\r\n");
+            if (!fullResponse && contentRange != null) head.append("Content-Range: ").append(contentRange).append("\r\n");
             head.append("Accept-Ranges: bytes\r\n");
             head.append("Cache-Control: private, max-age=3600\r\n");
             head.append("Connection: close\r\n\r\n");
