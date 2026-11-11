@@ -19,10 +19,53 @@ enum KinetixText {
     }
 }
 
+/// A dead VPN endpoint makes every hostname resolve stall for tens of seconds.
+/// Once two stream lookups in a row time out, fail fast for a few seconds so
+/// the player cannot get stuck in a retry storm. Scopes are separate: a blocked
+/// YouTube must not silence a working Yandex, and search is never gated.
+enum NetworkGate {
+    private static let lock = NSLock()
+    private static var failures: [String: Int] = [:]
+    private static var lastFailure: [String: Date] = [:]
+    private static var blockedUntil: [String: Date] = [:]
+
+    static func check(_ scope: String) throws {
+        lock.lock()
+        let until = blockedUntil[scope] ?? .distantPast
+        lock.unlock()
+        if Date() < until { throw KinetixError("Сеть не отвечает. Проверьте VPN и попробуйте снова") }
+    }
+
+    static func isNetwork(_ error: Error) -> Bool {
+        if (error as NSError).domain == NSURLErrorDomain { return true }
+        return (error as? KinetixError)?.message.hasPrefix("Сеть") == true
+    }
+
+    static func success(_ scope: String) {
+        lock.lock()
+        failures[scope] = 0
+        blockedUntil[scope] = .distantPast
+        lock.unlock()
+    }
+
+    static func failure(_ scope: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        if now.timeIntervalSince(lastFailure[scope] ?? .distantPast) > 20 { failures[scope] = 0 }
+        let count = (failures[scope] ?? 0) + 1
+        failures[scope] = count
+        lastFailure[scope] = now
+        blockedUntil[scope] = now.addingTimeInterval(count >= 2 ? 20 : 10)
+        if count >= 2 { failures[scope] = 0 }
+    }
+}
+
 /// Runs URLSession synchronously. The loopback server already handles requests on its own
 /// threads, so blocking there keeps the route code straightforward.
 enum SyncHTTP {
-    static func data(for request: URLRequest, timeout: TimeInterval = 40) throws -> (Data, URLResponse) {
+    static func data(for request: URLRequest, timeout: TimeInterval = 20, gate: String? = nil) throws -> (Data, URLResponse) {
+        if let gate { try NetworkGate.check(gate) }
         let semaphore = DispatchSemaphore(value: 0)
         var result: Result<(Data, URLResponse), Error>?
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
@@ -38,14 +81,18 @@ enum SyncHTTP {
         task.resume()
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
             task.cancel()
+            if let gate { NetworkGate.failure(gate) }
             throw KinetixError("Сеть не отвечает")
         }
         switch result {
         case .success(let value):
+            if let gate { NetworkGate.success(gate) }
             return value
         case .failure(let error):
+            if let gate, (error as NSError).domain == NSURLErrorDomain { NetworkGate.failure(gate) }
             throw error
         case nil:
+            if let gate { NetworkGate.failure(gate) }
             throw KinetixError("Сеть недоступна")
         }
     }
@@ -134,6 +181,7 @@ final class InnerTube {
     }
 
     func resolve(_ videoId: String) throws -> Stream {
+        try NetworkGate.check("yt")
         lock.lock()
         let cached = streams[videoId]
         lock.unlock()
@@ -146,19 +194,31 @@ final class InnerTube {
             return !cookieHeader.isEmpty
         }()
 
+        // The authenticated, anonymous and fallback lookups each used to wait
+        // 35 seconds; on a stalled VPN that kept the player frozen for minutes.
+        let deadline = now.addingTimeInterval(24)
+        func budget() throws -> TimeInterval {
+            let left = deadline.timeIntervalSinceNow
+            if left < 1 {
+                NetworkGate.failure("yt")
+                throw KinetixError("Сеть не отвечает. Проверьте VPN и попробуйте снова")
+            }
+            return min(12, left)
+        }
+
         var response: [String: Any]
         var state: String
         do {
-            response = try player(videoId, authenticated: true)
+            response = try player(videoId, authenticated: true, timeout: budget())
             state = playabilityState(response)
         } catch {
-            guard hasCookies else { throw error }
-            response = try player(videoId, authenticated: false)
+            guard hasCookies, !NetworkGate.isNetwork(error) else { throw error }
+            response = try player(videoId, authenticated: false, timeout: budget())
             state = playabilityState(response)
         }
         // A stale signed-in cookie makes YouTube answer LOGIN_REQUIRED for every
         // track. The anonymous request is the fallback that keeps the wave alive.
-        if state != "OK", hasCookies, let fallback = try? player(videoId, authenticated: false) {
+        if state != "OK", hasCookies, let left = try? budget(), let fallback = try? player(videoId, authenticated: false, timeout: left) {
             let fallbackState = playabilityState(fallback)
             if fallbackState == "OK" {
                 response = fallback
@@ -245,12 +305,12 @@ final class InnerTube {
         return ["context": ["client": client]]
     }
 
-    private func player(_ videoId: String, authenticated: Bool) throws -> [String: Any] {
+    private func player(_ videoId: String, authenticated: Bool, timeout: TimeInterval = 12) throws -> [String: Any] {
         var payload = basePayload()
         payload["videoId"] = videoId
         payload["contentCheckOk"] = true
         payload["racyCheckOk"] = true
-        return try post("player", payload, authenticated: authenticated)
+        return try post("player", payload, authenticated: authenticated, timeout: timeout, gate: "yt")
     }
 
     private func playabilityState(_ response: [String: Any]) -> String {
@@ -258,11 +318,11 @@ final class InnerTube {
         return status?["status"] as? String ?? ""
     }
 
-    private func post(_ endpoint: String, _ payload: [String: Any], authenticated: Bool = true) throws -> [String: Any] {
+    private func post(_ endpoint: String, _ payload: [String: Any], authenticated: Bool = true, timeout: TimeInterval = 15, gate: String? = nil) throws -> [String: Any] {
         guard let url = URL(string: "https://www.youtube.com/youtubei/v1/\(endpoint)?prettyPrint=false") else {
             throw KinetixError("Некорректный адрес YouTube")
         }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -280,7 +340,7 @@ final class InnerTube {
             request.setValue("https://www.youtube.com", forHTTPHeaderField: "X-Origin")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, response) = try SyncHTTP.data(for: request, timeout: 35)
+        let (data, response) = try SyncHTTP.data(for: request, timeout: timeout, gate: gate)
         guard let http = response as? HTTPURLResponse else { throw KinetixError("YouTube не ответил") }
         guard (200...299).contains(http.statusCode) else {
             let detail = KinetixText.shorten(String(data: data, encoding: .utf8) ?? "", 120)

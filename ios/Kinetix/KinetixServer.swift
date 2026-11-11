@@ -18,6 +18,13 @@ final class KinetixServer {
     private let imageLock = NSLock()
     private var images: [String: CachedImage] = [:]
 
+    /// A stalled upstream must not pile up connections: six audio streams are
+    /// more than the player ever needs, and a seventh waits instead of freezing
+    /// the whole loopback server.
+    private let streamSlots = DispatchSemaphore(value: 6)
+    private let streamLock = NSLock()
+    private var activeStreams: [String: StreamDownloader] = [:]
+
     private struct CachedImage {
         let type: String
         let body: Data
@@ -334,8 +341,53 @@ final class KinetixServer {
         }
     }
 
+    private func beginStream(_ key: String) throws {
+        streamLock.lock()
+        let stale = activeStreams[key]
+        streamLock.unlock()
+        stale?.cancel()
+        guard streamSlots.wait(timeout: .now() + 10) == .success else {
+            throw KinetixError("Сеть не успевает загрузить поток. Проверьте VPN и попробуйте снова")
+        }
+    }
+
+    private func endStream(_ key: String, downloader: StreamDownloader?) {
+        if let downloader {
+            streamLock.lock()
+            if activeStreams[key] === downloader { activeStreams.removeValue(forKey: key) }
+            streamLock.unlock()
+        }
+        streamSlots.signal()
+    }
+
+    private func registerStream(_ downloader: StreamDownloader, key: String) {
+        streamLock.lock()
+        activeStreams[key] = downloader
+        streamLock.unlock()
+    }
+
+    private func noteStreamResult(_ downloader: StreamDownloader, scope: String) {
+        // A seek or a newer retry cancels the old transfer on purpose; that is
+        // not evidence that the network itself is down.
+        if downloader.wasCanceled { return }
+        if downloader.headWritten || downloader.status != 0 {
+            NetworkGate.success(scope)
+        } else {
+            NetworkGate.failure(scope)
+        }
+    }
+
     private func proxyRemote(_ url: String, fallbackType: String, range: String?, client: Int32, refresh: (() throws -> String)?) throws {
         guard let target = URL(string: url), !url.isEmpty else { throw KinetixError("Источник не отдал поток") }
+        try NetworkGate.check("remote")
+        // Parallel byte-range requests for one file are legitimate; only the
+        // exact same request (a retry of the same offset) replaces its transfer.
+        let key = "url:" + url + "|" + (range ?? "full")
+        try beginStream(key)
+        var downloader: StreamDownloader?
+        var released = false
+        defer { if !released { endStream(key, downloader: downloader) } }
+
         var upstream = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
         upstream.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         upstream.setValue("*/*", forHTTPHeaderField: "Accept")
@@ -344,19 +396,34 @@ final class KinetixServer {
         let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
         upstream.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
 
-        let downloader = StreamDownloader(client: client, fallbackType: fallbackType, fullResponse: requestedRange == nil)
-        downloader.run(upstream)
+        let active = StreamDownloader(client: client, fallbackType: fallbackType, fullResponse: requestedRange == nil)
+        downloader = active
+        registerStream(active, key: key)
+        active.run(upstream)
 
-        if !downloader.headWritten {
-            if let refresh = refresh, downloader.status == 403 || downloader.status == 404 || downloader.status == 410 {
-                return try proxyRemote(try refresh(), fallbackType: fallbackType, range: range, client: client, refresh: nil)
+        if !active.headWritten {
+            noteStreamResult(active, scope: "remote")
+            if let refresh = refresh, active.status == 403 || active.status == 404 || active.status == 410 {
+                let fresh = try refresh()
+                endStream(key, downloader: active)
+                downloader = nil
+                released = true
+                return try proxyRemote(fresh, fallbackType: fallbackType, range: range, client: client, refresh: nil)
             }
-            let detail = downloader.detail.isEmpty ? "" : " " + downloader.detail
-            throw KinetixError("Источник не отдал поток (\(downloader.status))" + detail)
+            let detail = active.detail.isEmpty ? "" : " " + active.detail
+            throw KinetixError("Источник не отдал поток (\(active.status))" + detail)
         }
+        noteStreamResult(active, scope: "remote")
     }
 
     private func proxyStream(_ videoId: String, range: String?, client: Int32, retry: Bool) throws {
+        try NetworkGate.check("yt")
+        let key = "yt:" + videoId + "|" + (range ?? "full")
+        try beginStream(key)
+        var downloader: StreamDownloader?
+        var released = false
+        defer { if !released { endStream(key, downloader: downloader) } }
+
         let stream = try InnerTube.shared.resolve(videoId)
         guard let url = URL(string: stream.url), !stream.url.isEmpty else {
             throw KinetixError("YouTube не отдал поток")
@@ -367,18 +434,25 @@ final class KinetixServer {
         let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
         request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
 
-        let downloader = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil)
-        downloader.run(request)
+        let active = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil)
+        downloader = active
+        registerStream(active, key: key)
+        active.run(request)
 
-        if !downloader.headWritten {
-            if (downloader.status == 403 || downloader.status == 410) && retry {
+        if !active.headWritten {
+            noteStreamResult(active, scope: "yt")
+            if (active.status == 403 || active.status == 410) && retry {
                 InnerTube.shared.forget(videoId)
+                endStream(key, downloader: active)
+                downloader = nil
+                released = true
                 return try proxyStream(videoId, range: range, client: client, retry: false)
             }
-            let code = downloader.status
-            let detail = downloader.detail.isEmpty ? "" : " " + downloader.detail
+            let code = active.status
+            let detail = active.detail.isEmpty ? "" : " " + active.detail
             throw KinetixError("YouTube не отдал поток (\(code))" + detail)
         }
+        noteStreamResult(active, scope: "yt")
     }
 
     private func artistPhoto(_ name: String, client: Int32) throws {
@@ -561,7 +635,9 @@ final class KinetixServer {
         private let fallbackType: String
         private let fullResponse: Bool
         private let semaphore = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
         private var session: URLSession?
+        private var canceled = false
         private(set) var status = 0
         private(set) var headWritten = false
         private(set) var detail = ""
@@ -572,16 +648,44 @@ final class KinetixServer {
             self.fullResponse = fullResponse
         }
 
+        /// Called when the player seeks or retries the same track: the old
+        /// transfer is useless and used to keep a thread blocked for minutes.
+        func cancel() {
+            lock.lock()
+            if canceled { lock.unlock(); return }
+            canceled = true
+            let session = self.session
+            lock.unlock()
+            session?.invalidateAndCancel()
+        }
+
+        var wasCanceled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return canceled
+        }
+
         func run(_ request: URLRequest) {
             let configuration = URLSessionConfiguration.ephemeral
-            configuration.timeoutIntervalForRequest = 35
+            // A stalled VPN resolver must fail the stream quickly instead of
+            // holding the player for 35 seconds per attempt.
+            configuration.timeoutIntervalForRequest = 15
             configuration.timeoutIntervalForResource = 3600
             let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+            lock.lock()
             self.session = session
+            let canceledNow = canceled
+            lock.unlock()
+            if canceledNow {
+                session.invalidateAndCancel()
+                return
+            }
             session.dataTask(with: request).resume()
-            _ = semaphore.wait(timeout: .now() + 120)
-            session.invalidateAndCancel()
+            _ = semaphore.wait(timeout: .now() + 25)
+            lock.lock()
             self.session = nil
+            lock.unlock()
+            session.invalidateAndCancel()
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {

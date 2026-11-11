@@ -1018,7 +1018,7 @@ function App() {
       if (autoSkipGuard.current.count >= 2) {
         setBuffering(false)
         setPlaying(false)
-        setNotice('YouTube не отдаёт поток — включите VPN или выберите трек из Яндекс Музыки')
+        setNotice(current.source === 'youtube' ? 'YouTube не отдаёт поток — включите или перезапустите VPN' : 'Сеть не отвечает — проверьте VPN и попробуйте снова')
         return
       }
       const index = queue.findIndex(track => track.id === current.id)
@@ -1033,7 +1033,7 @@ function App() {
     }
     setBuffering(false)
     setPlaying(false)
-    setNotice(current.source === 'youtube' ? 'YouTube не отдал поток. Попробуйте ещё раз или выберите другой трек.' : 'Не удалось воспроизвести файл из источника')
+    setNotice(current.source === 'youtube' ? 'YouTube не отдал поток. Включите VPN и попробуйте ещё раз или выберите другой трек.' : 'Не удалось загрузить поток. Проверьте VPN и попробуйте ещё раз.')
   }
   function stopSeekWatch() {
     if (seekWatch.current) { clearInterval(seekWatch.current); seekWatch.current = null }
