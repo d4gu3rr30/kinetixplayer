@@ -429,7 +429,8 @@ final class KinetixServer {
             throw KinetixError("YouTube не отдал поток")
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        // googlevideo rejects URLs fetched with a different client's User-Agent.
+        request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
         request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
@@ -438,10 +439,12 @@ final class KinetixServer {
         downloader = active
         registerStream(active, key: key)
         active.run(request)
+        kinetixLog.info("yt stream \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) status=\(active.status)")
 
         if !active.headWritten {
             noteStreamResult(active, scope: "yt")
             if (active.status == 403 || active.status == 410) && retry {
+                InnerTube.shared.rotate()
                 InnerTube.shared.forget(videoId)
                 endStream(key, downloader: active)
                 downloader = nil

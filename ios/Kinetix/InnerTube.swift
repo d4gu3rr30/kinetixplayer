@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+let kinetixLog = Logger(subsystem: "app.kinetix.player", category: "net")
 
 struct KinetixError: LocalizedError {
     let message: String
@@ -98,15 +101,47 @@ enum SyncHTTP {
     }
 }
 
-/// Minimal YouTube InnerTube client for the VR client, which still hands out
-/// direct audio URLs without a cipher or a PoToken.
+/// Minimal YouTube InnerTube client. googlevideo ties a stream URL to the
+/// client that asked for it, so the CDN download must carry the same
+/// User-Agent; individual clients also get rejected server-side over time,
+/// so resolve() rotates through a list of profiles.
 final class InnerTube {
     static let shared = InnerTube()
+
+    private struct ClientProfile {
+        let tag: String
+        let name: String
+        let version: String
+        let userAgent: String
+        let headerName: String
+        let extra: [String: Any]
+    }
+
+    private static let profiles: [ClientProfile] = [
+        ClientProfile(tag: "vr", name: "ANDROID_VR", version: "1.62.27",
+                      userAgent: "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12; en_US; Quest 3 Build/SQ3A.220605.009.A1) gzip",
+                      headerName: "28",
+                      extra: ["androidSdkVersion": 32, "deviceMake": "Oculus", "deviceModel": "Quest 3", "osName": "Android", "osVersion": "12"]),
+        ClientProfile(tag: "ios", name: "IOS", version: "20.10.4",
+                      userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)",
+                      headerName: "5",
+                      extra: ["deviceMake": "Apple", "deviceModel": "iPhone16,2", "osName": "iPhone", "osVersion": "17.5.1.21F90"]),
+        ClientProfile(tag: "android", name: "ANDROID", version: "20.10.38",
+                      userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 12; en_US; Pixel 6 Build/SQ3A.220605.009.A1) gzip",
+                      headerName: "3",
+                      extra: ["androidSdkVersion": 32, "deviceMake": "Google", "deviceModel": "Pixel 6", "osName": "Android", "osVersion": "12"]),
+        ClientProfile(tag: "tv", name: "TVHTML5", version: "7.20250312.16.00",
+                      userAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
+                      headerName: "7",
+                      extra: [:]),
+    ]
 
     struct Stream {
         let url: String
         let mime: String
         let expires: Date
+        let userAgent: String
+        let tag: String
     }
 
     private struct CacheEntry {
@@ -114,11 +149,8 @@ final class InnerTube {
         let expires: Date
     }
 
-    private let userAgent = "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12; en_US; Quest 3 Build/SQ3A.220605.009.A1) gzip"
-    private let clientName = "ANDROID_VR"
-    private let clientVersion = "1.62.27"
-
     private let lock = NSLock()
+    private var clientIndex = 0
     private var searchCache: [String: CacheEntry] = [:]
     private var relatedCache: [String: CacheEntry] = [:]
     private var streams: [String: Stream] = [:]
@@ -148,9 +180,11 @@ final class InnerTube {
     func search(_ query: String, limit: Int, artistMode: Bool) throws -> [[String: Any]] {
         let key = (artistMode ? "a|" : "t|") + "\(limit)|" + query.lowercased()
         if let cached = cachedSearch(key) { return cached }
-        var payload = basePayload()
-        payload["query"] = query
-        let response = try post("search", payload)
+        let response = try lookup("search") { profile in
+            var payload = self.basePayload(profile)
+            payload["query"] = query
+            return payload
+        }
         var videos: [[String: Any]] = []
         var seen = Set<String>()
         collectVideos(response, into: &videos, seen: &seen)
@@ -163,9 +197,11 @@ final class InnerTube {
     func related(_ videoId: String, limit: Int) throws -> [[String: Any]] {
         let key = "\(limit)|" + videoId
         if let cached = cachedRelated(key) { return cached }
-        var payload = basePayload()
-        payload["videoId"] = videoId
-        let response = try post("next", payload)
+        let response = try lookup("next") { profile in
+            var payload = self.basePayload(profile)
+            payload["videoId"] = videoId
+            return payload
+        }
         var videos: [[String: Any]] = []
         var seen = Set<String>()
         collectVideos(response, into: &videos, seen: &seen)
@@ -180,19 +216,38 @@ final class InnerTube {
         lock.unlock()
     }
 
+    func rotate() {
+        lock.lock()
+        clientIndex = (clientIndex + 1) % Self.profiles.count
+        lock.unlock()
+    }
+
+    private func lookup(_ endpoint: String, _ makePayload: (ClientProfile) -> [String: Any]) throws -> [String: Any] {
+        lock.lock()
+        let start = clientIndex
+        lock.unlock()
+        var lastError: Error = KinetixError("YouTube не ответил")
+        for offset in 0..<2 {
+            let profile = Self.profiles[(start + offset) % Self.profiles.count]
+            do {
+                return try post(endpoint, makePayload(profile), profile: profile)
+            } catch {
+                kinetixLog.error("yt \(endpoint, privacy: .public) \(profile.tag, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
     func resolve(_ videoId: String) throws -> Stream {
         try NetworkGate.check("yt")
         lock.lock()
         let cached = streams[videoId]
+        let start = clientIndex
+        let hasCookies = !cookieHeader.isEmpty
         lock.unlock()
         let now = Date()
         if let cached = cached, cached.expires > now { return cached }
-
-        let hasCookies: Bool = {
-            lock.lock()
-            defer { lock.unlock() }
-            return !cookieHeader.isEmpty
-        }()
 
         // The authenticated, anonymous and fallback lookups each used to wait
         // 35 seconds; on a stalled VPN that kept the player frozen for minutes.
@@ -203,72 +258,87 @@ final class InnerTube {
                 NetworkGate.failure("yt")
                 throw KinetixError("Сеть не отвечает. Проверьте VPN и попробуйте снова")
             }
-            return min(12, left)
+            return min(10, left)
         }
 
-        var response: [String: Any]
-        var state: String
-        do {
-            response = try player(videoId, authenticated: true, timeout: budget())
-            state = playabilityState(response)
-        } catch {
-            guard hasCookies, !NetworkGate.isNetwork(error) else { throw error }
-            response = try player(videoId, authenticated: false, timeout: budget())
-            state = playabilityState(response)
-        }
-        // A stale signed-in cookie makes YouTube answer LOGIN_REQUIRED for every
-        // track. The anonymous request is the fallback that keeps the wave alive.
-        if state != "OK", hasCookies, let left = try? budget(), let fallback = try? player(videoId, authenticated: false, timeout: left) {
-            let fallbackState = playabilityState(fallback)
-            if fallbackState == "OK" {
-                response = fallback
-                state = fallbackState
+        var lastReason = ""
+        for offset in 0..<Self.profiles.count {
+            let index = (start + offset) % Self.profiles.count
+            let profile = Self.profiles[index]
+            var response: [String: Any]?
+            var state = ""
+            do {
+                let auth = try player(videoId, profile: profile, authenticated: hasCookies, timeout: budget())
+                response = auth
+                state = playabilityState(auth)
+                // A stale signed-in cookie makes YouTube answer LOGIN_REQUIRED
+                // for every track; the anonymous request keeps the wave alive.
+                if state != "OK", hasCookies {
+                    let anon = try player(videoId, profile: profile, authenticated: false, timeout: budget())
+                    if playabilityState(anon) == "OK" {
+                        response = anon
+                        state = "OK"
+                    }
+                }
+            } catch {
+                kinetixLog.error("yt player \(videoId, privacy: .public) \(profile.tag, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
+                lastReason = error.localizedDescription
+                continue
             }
-        }
-        if state != "OK" {
-            let status = response["playabilityStatus"] as? [String: Any]
-            let reason = (status?["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if state == "LOGIN_REQUIRED" {
-                throw KinetixError("YouTube просит войти в аккаунт для этого трека — включи другой, он заиграет")
+            guard let response, state == "OK" else {
+                let status = response?["playabilityStatus"] as? [String: Any]
+                let reason = (status?["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                kinetixLog.error("yt player \(videoId, privacy: .public) \(profile.tag, privacy: .public) state=\(state, privacy: .public) reason=\(reason, privacy: .public)")
+                if state == "LOGIN_REQUIRED" {
+                    lastReason = "YouTube просит войти в аккаунт для этого трека — включи другой, он заиграет"
+                } else {
+                    lastReason = reason.isEmpty ? "YouTube не отдал этот трек" : reason
+                }
+                continue
             }
-            throw KinetixError(reason.isEmpty ? "YouTube не отдал этот трек" : reason)
-        }
-
-        guard let streaming = response["streamingData"] as? [String: Any] else {
-            throw KinetixError("YouTube не отдал аудиопоток")
-        }
-        guard let formats = (streaming["adaptiveFormats"] as? [[String: Any]]) ?? (streaming["formats"] as? [[String: Any]]) else {
-            throw KinetixError("YouTube не отдал аудиопоток")
-        }
-
-        var best: [String: Any]?
-        var bestRank = -1
-        for format in formats {
-            let mime = format["mimeType"] as? String ?? ""
-            if !mime.hasPrefix("audio/") { continue }
-            let url = format["url"] as? String ?? ""
-            if url.isEmpty { continue }
-            let rank = audioRank(intValue(format["itag"]), mime)
-            if rank > bestRank {
-                bestRank = rank
-                best = format
+            guard let streaming = response["streamingData"] as? [String: Any],
+                  let formats = (streaming["adaptiveFormats"] as? [[String: Any]]) ?? (streaming["formats"] as? [[String: Any]]) else {
+                kinetixLog.error("yt player \(videoId, privacy: .public) \(profile.tag, privacy: .public) no streamingData")
+                lastReason = "YouTube не отдал аудиопоток"
+                continue
             }
-        }
-        guard let chosen = best else { throw KinetixError("YouTube не отдал аудиодорожку") }
 
-        var mime = chosen["mimeType"] as? String ?? "audio/mp4"
-        if let separator = mime.firstIndex(of: ";") {
-            mime = String(mime[..<separator]).trimmingCharacters(in: .whitespaces)
-        }
-        let expiresIn = intValue(streaming["expiresInSeconds"])
-        let ttl = max(120, min(expiresIn > 0 ? expiresIn : 3 * 60 * 60, 3 * 60 * 60))
-        let stream = Stream(url: chosen["url"] as? String ?? "", mime: mime, expires: now.addingTimeInterval(TimeInterval(ttl)))
+            var best: [String: Any]?
+            var bestRank = -1
+            for format in formats {
+                let mime = format["mimeType"] as? String ?? ""
+                if !mime.hasPrefix("audio/") { continue }
+                let url = format["url"] as? String ?? ""
+                if url.isEmpty { continue }
+                let rank = audioRank(intValue(format["itag"]), mime)
+                if rank > bestRank {
+                    bestRank = rank
+                    best = format
+                }
+            }
+            guard let chosen = best else {
+                kinetixLog.error("yt player \(videoId, privacy: .public) \(profile.tag, privacy: .public) no audio itag")
+                lastReason = "YouTube не отдал аудиодорожку"
+                continue
+            }
 
-        lock.lock()
-        if streams.count > 120 { streams.removeAll() }
-        streams[videoId] = stream
-        lock.unlock()
-        return stream
+            var mime = chosen["mimeType"] as? String ?? "audio/mp4"
+            if let separator = mime.firstIndex(of: ";") {
+                mime = String(mime[..<separator]).trimmingCharacters(in: .whitespaces)
+            }
+            let expiresIn = intValue(streaming["expiresInSeconds"])
+            let ttl = max(120, min(expiresIn > 0 ? expiresIn : 3 * 60 * 60, 3 * 60 * 60))
+            let stream = Stream(url: chosen["url"] as? String ?? "", mime: mime, expires: now.addingTimeInterval(TimeInterval(ttl)), userAgent: profile.userAgent, tag: profile.tag)
+
+            lock.lock()
+            if streams.count > 120 { streams.removeAll() }
+            streams[videoId] = stream
+            clientIndex = index
+            lock.unlock()
+            kinetixLog.info("yt player \(videoId, privacy: .public) \(profile.tag, privacy: .public) OK itag=\(self.intValue(chosen["itag"]))")
+            return stream
+        }
+        throw KinetixError(lastReason.isEmpty ? "YouTube не отдал этот трек" : lastReason)
     }
 
     private func intValue(_ value: Any?) -> Int {
@@ -291,26 +361,21 @@ final class InnerTube {
         }
     }
 
-    private func basePayload() -> [String: Any] {
-        var client: [String: Any] = [:]
-        client["clientName"] = clientName
-        client["clientVersion"] = clientVersion
-        client["androidSdkVersion"] = 32
-        client["deviceMake"] = "Oculus"
-        client["deviceModel"] = "Quest 3"
-        client["osName"] = "Android"
-        client["osVersion"] = "12"
+    private func basePayload(_ profile: ClientProfile) -> [String: Any] {
+        var client: [String: Any] = profile.extra
+        client["clientName"] = profile.name
+        client["clientVersion"] = profile.version
         client["hl"] = "ru"
         client["gl"] = "US"
         return ["context": ["client": client]]
     }
 
-    private func player(_ videoId: String, authenticated: Bool, timeout: TimeInterval = 12) throws -> [String: Any] {
-        var payload = basePayload()
+    private func player(_ videoId: String, profile: ClientProfile, authenticated: Bool, timeout: TimeInterval = 12) throws -> [String: Any] {
+        var payload = basePayload(profile)
         payload["videoId"] = videoId
         payload["contentCheckOk"] = true
         payload["racyCheckOk"] = true
-        return try post("player", payload, authenticated: authenticated, timeout: timeout, gate: "yt")
+        return try post("player", payload, profile: profile, authenticated: authenticated, timeout: timeout, gate: "yt")
     }
 
     private func playabilityState(_ response: [String: Any]) -> String {
@@ -318,18 +383,18 @@ final class InnerTube {
         return status?["status"] as? String ?? ""
     }
 
-    private func post(_ endpoint: String, _ payload: [String: Any], authenticated: Bool = true, timeout: TimeInterval = 15, gate: String? = nil) throws -> [String: Any] {
+    private func post(_ endpoint: String, _ payload: [String: Any], profile: ClientProfile, authenticated: Bool = true, timeout: TimeInterval = 15, gate: String? = nil) throws -> [String: Any] {
         guard let url = URL(string: "https://www.youtube.com/youtubei/v1/\(endpoint)?prettyPrint=false") else {
             throw KinetixError("Некорректный адрес YouTube")
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(profile.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
-        request.setValue("28", forHTTPHeaderField: "X-YouTube-Client-Name")
-        request.setValue(clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.setValue(profile.headerName, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(profile.version, forHTTPHeaderField: "X-YouTube-Client-Version")
         lock.lock()
         let cookies = authenticated ? cookieHeader : ""
         lock.unlock()
