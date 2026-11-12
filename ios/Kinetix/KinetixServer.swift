@@ -493,30 +493,11 @@ final class KinetixServer {
             guard let url = URL(string: stream.url), !stream.url.isEmpty else {
                 throw KinetixError("YouTube не отдал поток")
             }
-            // googlevideo answers 403 on the first try of a fresh URL; repeating
-            // the same URL is cheap and usually lands. One client rotation is the
-            // last resort before giving up.
-            for attempt in 0..<3 {
-                var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-                // googlevideo rejects URLs fetched with a different client's User-Agent.
-                request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
-                request.setValue("*/*", forHTTPHeaderField: "Accept")
-                // A byte range makes the CDN stream at full speed instead of throttling.
-                request.setValue("bytes=0-", forHTTPHeaderField: "Range")
-                do {
-                    let (data, response) = try SyncHTTP.data(for: request, timeout: 90, gate: "yt", session: InnerTube.shared.apiSession)
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    if (200...299).contains(code), !data.isEmpty {
-                        kinetixLog.info("yt audio \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) bytes=\(data.count) status=\(code) attempt=\(attempt)")
-                        return CachedAudio(data: data, type: stream.mime)
-                    }
-                    lastReason = "YouTube не отдал поток (\(code))"
-                    kinetixLog.info("yt audio \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) status=\(code) attempt=\(attempt)")
-                } catch {
-                    lastReason = error.localizedDescription
-                    kinetixLog.error("yt audio \(videoId, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
-                }
-                if attempt < 2 { Thread.sleep(forTimeInterval: 0.15) }
+            do {
+                let data = try fetchBoundedAudio(url, stream: stream, videoId: videoId)
+                return CachedAudio(data: data, type: stream.mime)
+            } catch {
+                lastReason = error.localizedDescription
             }
             if round == 0 {
                 InnerTube.shared.rotate()
@@ -524,6 +505,76 @@ final class KinetixServer {
             }
         }
         throw KinetixError(lastReason)
+    }
+
+    /// googlevideo детерминированно отвечает 403 на открытый Range `bytes=0-`,
+    /// но отдаёт ограниченный диапазон целиком (206). Размер берём из `clen`
+    /// ссылки или пробы `bytes=0-1`, затем качаем bounded `bytes=0-(total-1)`.
+    private func fetchBoundedAudio(_ url: URL, stream: InnerTube.Stream, videoId: String) throws -> Data {
+        var total = Self.clenFromURL(url)
+        if total <= 0 {
+            let (probe, response) = try audioRequest(url, stream: stream, videoId: videoId, range: "bytes=0-1", label: "probe")
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200, probe.count > 2 { return probe }
+            total = Self.totalFromContentRange(response)
+            if total <= 0 { total = probe.count }
+        }
+        guard total > 0 else { throw KinetixError("YouTube не отдал размер трека") }
+        let (data, response) = try audioRequest(url, stream: stream, videoId: videoId, range: "bytes=0-\(total - 1)", label: "full")
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if (200...299).contains(code), !data.isEmpty {
+            kinetixLog.info("yt audio \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) bytes=\(data.count) status=\(code) total=\(total)")
+            return data
+        }
+        throw KinetixError("YouTube не отдал поток (\(code))")
+    }
+
+    /// Свежая ephemeral-сессия на каждую попытку: VPN ротирует exit-IP между
+    /// соединениями, а ссылка привязана к IP. Общее соединение «прибилось» бы к
+    /// неверному IP и давало 403 на всех ретраях (регресс буферизации).
+    private func audioRequest(_ url: URL, stream: InnerTube.Stream, videoId: String, range: String, label: String) throws -> (Data, URLResponse) {
+        var lastBody = ""
+        var lastError = "YouTube не отдал поток"
+        for attempt in 0..<5 {
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+            // googlevideo rejects URLs fetched with a different client's User-Agent.
+            request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue("*/*", forHTTPHeaderField: "Accept")
+            request.setValue(range, forHTTPHeaderField: "Range")
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 20
+            configuration.timeoutIntervalForResource = 120
+            if let proxy = InnerTube.shared.proxyConfig { configuration.connectionProxyDictionary = proxy.dictionary }
+            let session = URLSession(configuration: configuration)
+            do {
+                let (data, response) = try SyncHTTP.data(for: request, timeout: 90, gate: "yt", session: session)
+                session.finishTasksAndInvalidate()
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if (200...299).contains(code) { return (data, response) }
+                lastCode = code
+                lastBody = KinetixText.shorten(String(decoding: data.prefix(160), as: UTF8.self), 120)
+                lastError = "YouTube не отдал поток (\(code))"
+                kinetixLog.info("yt audio \(videoId, privacy: .public) \(label, privacy: .public) client=\(stream.tag, privacy: .public) range=\(range, privacy: .public) status=\(code) attempt=\(attempt)")
+            } catch {
+                session.finishTasksAndInvalidate()
+                lastError = error.localizedDescription
+                kinetixLog.error("yt audio \(videoId, privacy: .public) \(label, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
+            }
+            if attempt < 4 { Thread.sleep(forTimeInterval: 0.35) }
+        }
+        throw KinetixError(lastBody.isEmpty ? lastError : lastError + " " + lastBody)
+    }
+
+    private static func clenFromURL(_ url: URL) -> Int {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        if let value = items?.first(where: { $0.name == "clen" })?.value, let number = Int(value) { return number }
+        return 0
+    }
+
+    private static func totalFromContentRange(_ response: URLResponse) -> Int {
+        guard let header = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Range"),
+              let slash = header.lastIndex(of: "/") else { return 0 }
+        return Int(header[header.index(after: slash)...].trimmingCharacters(in: .whitespaces)) ?? 0
     }
 
     private func serveAudio(_ cached: CachedAudio, range: String?, client: Int32) throws {
