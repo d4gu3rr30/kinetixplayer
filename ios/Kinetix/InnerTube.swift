@@ -45,19 +45,21 @@ struct ProxyConfig {
         return ProxyConfig(host: host, port: port, socks: socks, username: url.user ?? "", password: url.password ?? "")
     }
 
+    // String keys: iOS marks the SOCKS/HTTPS CFNetwork constants unavailable,
+    // but connectionProxyDictionary reads these same keys on every platform.
     var dictionary: [AnyHashable: Any] {
         var dict: [AnyHashable: Any] = [:]
         if socks {
-            dict[kCFNetworkProxiesSOCKSEnable] = true
-            dict[kCFNetworkProxiesSOCKSProxy] = host
-            dict[kCFNetworkProxiesSOCKSPort] = port
+            dict["SOCKSEnable"] = true
+            dict["SOCKSProxy"] = host
+            dict["SOCKSPort"] = port
         } else {
-            dict[kCFNetworkProxiesHTTPEnable] = true
-            dict[kCFNetworkProxiesHTTPProxy] = host
-            dict[kCFNetworkProxiesHTTPPort] = port
-            dict[kCFNetworkProxiesHTTPSEnable] = true
-            dict[kCFNetworkProxiesHTTPSProxy] = host
-            dict[kCFNetworkProxiesHTTPSPort] = port
+            dict["HTTPEnable"] = true
+            dict["HTTPProxy"] = host
+            dict["HTTPPort"] = port
+            dict["HTTPSEnable"] = true
+            dict["HTTPSProxy"] = host
+            dict["HTTPSPort"] = port
         }
         if !username.isEmpty {
             dict[kCFProxyUsernameKey] = username
