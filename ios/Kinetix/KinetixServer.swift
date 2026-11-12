@@ -25,6 +25,20 @@ final class KinetixServer {
     private let streamLock = NSLock()
     private var activeStreams: [String: StreamDownloader] = [:]
 
+    // WebKit pulls a track in many small range requests, and googlevideo answers
+    // 403 on the first try of nearly every one. Downloading the whole file once
+    // and serving every range from memory turns dozens of slow round-trips into
+    // a single fetch, so playback starts in seconds instead of minutes.
+    private let audioLock = NSLock()
+    private var audioCache: [String: CachedAudio] = [:]
+    private var audioOrder: [String] = []
+    private let audioDownloadQueue = DispatchQueue(label: "app.kinetix.audio.download")
+
+    private struct CachedAudio {
+        let data: Data
+        let type: String
+    }
+
     private struct CachedImage {
         let type: String
         let body: Data
@@ -163,7 +177,7 @@ final class KinetixServer {
         if path == "/api/yt-stream" {
             let videoId = request.param("v")
             guard isVideoId(videoId) else { return try sendJSON(client, status: 400, ["error": "Некорректный трек"]) }
-            return try proxyStream(videoId, range: request.headers["range"], client: client, retry: true)
+            return try proxyStream(videoId, range: request.headers["range"], client: client)
         }
         if path == "/api/integrations" {
             if request.method == "POST" { return try saveIntegrations(request, client: client) }
@@ -429,57 +443,137 @@ final class KinetixServer {
         noteStreamResult(active, scope: "remote")
     }
 
-    private func proxyStream(_ videoId: String, range: String?, client: Int32, retry: Bool) throws {
+    private func proxyStream(_ videoId: String, range: String?, client: Int32) throws {
         try NetworkGate.check("yt")
-        let key = "yt:" + videoId + "|" + (range ?? "full")
+        let key = "yt:" + videoId
         try beginStream(key)
-        var downloader: StreamDownloader?
-        var released = false
-        defer { if !released { endStream(key, downloader: downloader) } }
-
-        let stream = try InnerTube.shared.resolve(videoId)
-        guard let url = URL(string: stream.url), !stream.url.isEmpty else {
-            throw KinetixError("YouTube не отдал поток")
+        defer { endStream(key, downloader: nil) }
+        do {
+            let cached = try ensureAudio(videoId)
+            try serveAudio(cached, range: range, client: client)
+            NetworkGate.success("yt")
+        } catch {
+            if NetworkGate.isNetwork(error) { NetworkGate.failure("yt") }
+            throw error
         }
-        let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
-        var active: StreamDownloader?
-        // googlevideo answers 403 intermittently even for a fresh URL (the VPN
-        // exit IP rotates between connections). Repeating the same URL is cheap
-        // and usually lands; a full client rotation is the last resort.
-        for attempt in 0..<3 {
-            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
-            // googlevideo rejects URLs fetched with a different client's User-Agent.
-            request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
-            request.setValue("*/*", forHTTPHeaderField: "Accept")
-            request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
-            let current = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil, proxy: InnerTube.shared.proxyConfig)
-            downloader = current
-            registerStream(current, key: key)
-            current.run(request)
-            active = current
-            kinetixLog.info("yt stream \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) range=\(requestedRange ?? "bytes=0-", privacy: .public) status=\(current.status) attempt=\(attempt)")
-            if current.headWritten || current.wasCanceled { break }
-            if current.status != 403 && current.status != 410 { break }
-            if attempt < 2 { Thread.sleep(forTimeInterval: 0.4) }
-        }
-        guard let active else { throw KinetixError("YouTube не отдал поток") }
+    }
 
-        if !active.headWritten {
-            noteStreamResult(active, scope: "yt")
-            if active.wasCanceled { return }
-            if (active.status == 403 || active.status == 410) && retry {
+    /// Returns the fully downloaded track, fetching it once per video. Concurrent
+    /// range requests serialize on one queue so the file is never pulled twice.
+    private func ensureAudio(_ videoId: String) throws -> CachedAudio {
+        audioLock.lock()
+        if let cached = audioCache[videoId] {
+            touchAudio(videoId)
+            audioLock.unlock()
+            return cached
+        }
+        audioLock.unlock()
+        return try audioDownloadQueue.sync {
+            audioLock.lock()
+            if let cached = audioCache[videoId] {
+                touchAudio(videoId)
+                audioLock.unlock()
+                return cached
+            }
+            audioLock.unlock()
+            let cached = try downloadFullAudio(videoId)
+            audioLock.lock()
+            audioCache[videoId] = cached
+            audioOrder.append(videoId)
+            evictAudio()
+            audioLock.unlock()
+            return cached
+        }
+    }
+
+    private func downloadFullAudio(_ videoId: String) throws -> CachedAudio {
+        var lastReason = "YouTube не отдал поток"
+        for round in 0..<2 {
+            let stream = try InnerTube.shared.resolve(videoId)
+            guard let url = URL(string: stream.url), !stream.url.isEmpty else {
+                throw KinetixError("YouTube не отдал поток")
+            }
+            // googlevideo answers 403 on the first try of a fresh URL; repeating
+            // the same URL is cheap and usually lands. One client rotation is the
+            // last resort before giving up.
+            for attempt in 0..<3 {
+                var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+                // googlevideo rejects URLs fetched with a different client's User-Agent.
+                request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
+                request.setValue("*/*", forHTTPHeaderField: "Accept")
+                // A byte range makes the CDN stream at full speed instead of throttling.
+                request.setValue("bytes=0-", forHTTPHeaderField: "Range")
+                do {
+                    let (data, response) = try SyncHTTP.data(for: request, timeout: 90, gate: "yt", session: InnerTube.shared.apiSession)
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if (200...299).contains(code), !data.isEmpty {
+                        kinetixLog.info("yt audio \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) bytes=\(data.count) status=\(code) attempt=\(attempt)")
+                        return CachedAudio(data: data, type: stream.mime)
+                    }
+                    lastReason = "YouTube не отдал поток (\(code))"
+                    kinetixLog.info("yt audio \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) status=\(code) attempt=\(attempt)")
+                } catch {
+                    lastReason = error.localizedDescription
+                    kinetixLog.error("yt audio \(videoId, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
+                }
+                if attempt < 2 { Thread.sleep(forTimeInterval: 0.15) }
+            }
+            if round == 0 {
                 InnerTube.shared.rotate()
                 InnerTube.shared.forget(videoId)
-                endStream(key, downloader: active)
-                downloader = nil
-                released = true
-                return try proxyStream(videoId, range: range, client: client, retry: false)
             }
-            let code = active.status
-            let detail = active.detail.isEmpty ? "" : " " + active.detail
-            throw KinetixError("YouTube не отдал поток (\(code))" + detail)
         }
-        noteStreamResult(active, scope: "yt")
+        throw KinetixError(lastReason)
+    }
+
+    private func serveAudio(_ cached: CachedAudio, range: String?, client: Int32) throws {
+        let total = cached.data.count
+        let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
+        if let requestedRange, let bounds = parseRange(requestedRange, total: total) {
+            let slice = cached.data.subdata(in: bounds.0..<(bounds.1 + 1))
+            let head = "HTTP/1.1 206 Partial Content\r\n" +
+                "Content-Type: \(cached.type)\r\n" +
+                "Content-Length: \(slice.count)\r\n" +
+                "Content-Range: bytes \(bounds.0)-\(bounds.1)/\(total)\r\n" +
+                "Accept-Ranges: bytes\r\nCache-Control: private, max-age=3600\r\nConnection: close\r\n\r\n"
+            try Self.writeAll(client, Data(head.utf8))
+            try Self.writeAll(client, slice)
+            return
+        }
+        try sendBytes(client, status: 200, type: cached.type, body: cached.data, cache: "private, max-age=3600")
+    }
+
+    private func parseRange(_ header: String, total: Int) -> (Int, Int)? {
+        guard total > 0, header.hasPrefix("bytes=") else { return nil }
+        let spec = header.dropFirst(6)
+        guard !spec.contains(",") else { return nil }
+        let parts = spec.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        let startText = String(parts[0])
+        let endText = String(parts[1])
+        if startText.isEmpty {
+            guard let suffix = Int(endText), suffix > 0 else { return nil }
+            return (max(0, total - suffix), total - 1)
+        }
+        guard let start = Int(startText), start >= 0, start < total else { return nil }
+        let end = endText.isEmpty ? total - 1 : min(Int(endText) ?? (total - 1), total - 1)
+        guard end >= start else { return nil }
+        return (start, end)
+    }
+
+    private func touchAudio(_ key: String) {
+        if let index = audioOrder.firstIndex(of: key) {
+            audioOrder.remove(at: index)
+            audioOrder.append(key)
+        }
+    }
+
+    private func evictAudio() {
+        while audioOrder.count > 6 || audioCache.values.reduce(0, { $0 + $1.data.count }) > 64 * 1024 * 1024 {
+            guard let oldest = audioOrder.first else { break }
+            audioOrder.removeFirst()
+            audioCache.removeValue(forKey: oldest)
+        }
     }
 
     private func artistPhoto(_ name: String, client: Int32) throws {

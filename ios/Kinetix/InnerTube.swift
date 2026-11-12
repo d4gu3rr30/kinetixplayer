@@ -249,7 +249,7 @@ final class InnerTube {
         return proxy
     }
 
-    private var apiSession: URLSession {
+    var apiSession: URLSession {
         lock.lock()
         defer { lock.unlock() }
         return session
