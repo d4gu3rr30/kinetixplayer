@@ -551,7 +551,6 @@ final class KinetixServer {
                 session.finishTasksAndInvalidate()
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200...299).contains(code) { return (data, response) }
-                lastCode = code
                 lastBody = KinetixText.shorten(String(decoding: data.prefix(160), as: UTF8.self), 120)
                 lastError = "YouTube не отдал поток (\(code))"
                 kinetixLog.info("yt audio \(videoId, privacy: .public) \(label, privacy: .public) client=\(stream.tag, privacy: .public) range=\(range, privacy: .public) status=\(code) attempt=\(attempt)")
