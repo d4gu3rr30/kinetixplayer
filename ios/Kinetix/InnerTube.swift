@@ -1,4 +1,5 @@
 import Foundation
+import CFNetwork
 import os.log
 
 let kinetixLog = Logger(subsystem: "app.kinetix.player", category: "net")
@@ -19,6 +20,50 @@ enum KinetixText {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.count > limit ? String(clean.prefix(limit)) + "…" : clean
+    }
+}
+
+/// A user-supplied proxy used ONLY for YouTube traffic; Yandex and VK always
+/// go out directly so a foreign VPN exit cannot break them.
+struct ProxyConfig {
+    let host: String
+    let port: Int
+    let socks: Bool
+    let username: String
+    let password: String
+
+    static func parse(_ raw: String) -> ProxyConfig? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return nil }
+        if !text.contains("://") { text = "http://" + text }
+        guard let url = URL(string: text), let host = url.host, !host.isEmpty else { return nil }
+        let scheme = (url.scheme ?? "http").lowercased()
+        let socks = scheme.hasPrefix("socks")
+        guard scheme == "http" || scheme == "https" || socks else { return nil }
+        let port = url.port ?? (socks ? 1080 : 8080)
+        guard port > 0 && port <= 65535 else { return nil }
+        return ProxyConfig(host: host, port: port, socks: socks, username: url.user ?? "", password: url.password ?? "")
+    }
+
+    var dictionary: [AnyHashable: Any] {
+        var dict: [AnyHashable: Any] = [:]
+        if socks {
+            dict[kCFNetworkProxiesSOCKSEnable] = true
+            dict[kCFNetworkProxiesSOCKSProxy] = host
+            dict[kCFNetworkProxiesSOCKSPort] = port
+        } else {
+            dict[kCFNetworkProxiesHTTPEnable] = true
+            dict[kCFNetworkProxiesHTTPProxy] = host
+            dict[kCFNetworkProxiesHTTPPort] = port
+            dict[kCFNetworkProxiesHTTPSEnable] = true
+            dict[kCFNetworkProxiesHTTPSProxy] = host
+            dict[kCFNetworkProxiesHTTPSPort] = port
+        }
+        if !username.isEmpty {
+            dict[kCFProxyUsernameKey] = username
+            dict[kCFProxyPasswordKey] = password
+        }
+        return dict
     }
 }
 
@@ -67,11 +112,11 @@ enum NetworkGate {
 /// Runs URLSession synchronously. The loopback server already handles requests on its own
 /// threads, so blocking there keeps the route code straightforward.
 enum SyncHTTP {
-    static func data(for request: URLRequest, timeout: TimeInterval = 20, gate: String? = nil) throws -> (Data, URLResponse) {
+    static func data(for request: URLRequest, timeout: TimeInterval = 20, gate: String? = nil, session: URLSession = .shared) throws -> (Data, URLResponse) {
         if let gate { try NetworkGate.check(gate) }
         let semaphore = DispatchSemaphore(value: 0)
         var result: Result<(Data, URLResponse), Error>?
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = session.dataTask(with: request) { data, response, error in
             if let error = error {
                 result = .failure(error)
             } else if let data = data, let response = response {
@@ -155,6 +200,8 @@ final class InnerTube {
     private var relatedCache: [String: CacheEntry] = [:]
     private var streams: [String: Stream] = [:]
     private var cookieHeader = ""
+    private var proxy: ProxyConfig?
+    private var session: URLSession = .shared
 
     private static let dashedTitle = regex(#"^(.{1,60}?)\s+[-–—]\s+(.{1,140})$"#)
     private static let titleNoise = regex(#"\s*[\[(][^\])]*(?:official\s*(?:music\s*)?(?:video|audio|visualizer|lyric\s*video)|lyrics?|клип|премьера|premiere|m/?v|audio|visualizer)[^\])]*[\])]\s*$"#, options: [.caseInsensitive])
@@ -175,6 +222,35 @@ final class InnerTube {
         relatedCache.removeAll()
         streams.removeAll()
         lock.unlock()
+    }
+
+    /// Empty string disables the proxy. Stream URLs are tied to the exit IP,
+    /// so cached ones are dropped whenever the route changes.
+    func setProxy(_ raw: String) {
+        let config = ProxyConfig.parse(raw)
+        let configuration = URLSessionConfiguration.ephemeral
+        if let config { configuration.connectionProxyDictionary = config.dictionary }
+        let fresh = URLSession(configuration: configuration)
+        lock.lock()
+        let old = session
+        proxy = config
+        session = fresh
+        streams.removeAll()
+        lock.unlock()
+        if old !== URLSession.shared { old.finishTasksAndInvalidate() }
+        kinetixLog.info("yt proxy \(config == nil ? "off" : "on", privacy: .public)")
+    }
+
+    var proxyConfig: ProxyConfig? {
+        lock.lock()
+        defer { lock.unlock() }
+        return proxy
+    }
+
+    private var apiSession: URLSession {
+        lock.lock()
+        defer { lock.unlock() }
+        return session
     }
 
     func search(_ query: String, limit: Int, artistMode: Bool) throws -> [[String: Any]] {
@@ -405,7 +481,7 @@ final class InnerTube {
             request.setValue("https://www.youtube.com", forHTTPHeaderField: "X-Origin")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, response) = try SyncHTTP.data(for: request, timeout: timeout, gate: gate)
+        let (data, response) = try SyncHTTP.data(for: request, timeout: timeout, gate: gate, session: apiSession)
         guard let http = response as? HTTPURLResponse else { throw KinetixError("YouTube не ответил") }
         guard (200...299).contains(http.statusCode) else {
             let detail = KinetixText.shorten(String(data: data, encoding: .utf8) ?? "", 120)

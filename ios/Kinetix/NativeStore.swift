@@ -9,6 +9,7 @@ final class NativeStore {
     private static let keyCookies = "youtube.cookies"
     private static let keyCookieCount = "youtube.count"
     private static let keyCookieUpdated = "youtube.updated"
+    private static let keyYTProxy = "youtube.proxy"
 
     private let defaults = UserDefaults.standard
 
@@ -17,6 +18,10 @@ final class NativeStore {
     var vk: String { defaults.string(forKey: Self.keyVK) ?? "" }
 
     var yandex: String { defaults.string(forKey: Self.keyYandex) ?? "" }
+
+    var ytProxy: String { defaults.string(forKey: Self.keyYTProxy) ?? "" }
+
+    func setYTProxy(_ value: String) { defaults.set(value, forKey: Self.keyYTProxy) }
 
     var cookies: String { defaults.string(forKey: Self.keyCookies) ?? "" }
 

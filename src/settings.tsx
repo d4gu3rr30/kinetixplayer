@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowLeftRight, AudioLines, Check, CircleAlert, Download, ExternalLink, Eye, EyeOff, KeyRound, Loader2, MonitorSmartphone, Power, Rocket, ShieldCheck, Sparkles, SlidersHorizontal, Timer, MonitorPlay, ListOrdered, Trash2, Upload, Wand2, FileText, ThumbsDown, Undo2 } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, AudioLines, Check, CircleAlert, Download, ExternalLink, Eye, EyeOff, Globe, KeyRound, Loader2, MonitorSmartphone, Power, Rocket, ShieldCheck, Sparkles, SlidersHorizontal, Timer, MonitorPlay, ListOrdered, Trash2, Upload, Wand2, FileText, ThumbsDown, Undo2 } from 'lucide-react'
 import type { Track } from './types'
 import type { User } from './account'
 import { isAndroid, isIOS } from './platform'
@@ -57,7 +57,7 @@ const tokenSources = [
 ]
 
 type TokenStatus = { set: boolean; length: number }
-type Integrations = { vk: TokenStatus; yandex: TokenStatus; google: TokenStatus; googleSecret: TokenStatus }
+type Integrations = { vk: TokenStatus; yandex: TokenStatus; google: TokenStatus; googleSecret: TokenStatus; ytProxy?: TokenStatus }
 
 export function SettingsView({ settings, onChange, onBack, onNotice, onConfigChange, dislikes, onRestoreDislike, onClearDislikes, user }: { settings: Settings; onChange: (patch: Partial<Settings>) => void; onBack: () => void; onNotice: (message: string) => void; onConfigChange: () => void; dislikes: Track[]; onRestoreDislike: (track: Track) => void; onClearDislikes: () => void; user: User | null }) {
   const [status, setStatus] = useState<YouTubeStatus | null>(null)
@@ -74,6 +74,8 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
   const [googleDraft, setGoogleDraft] = useState({ id: '', secret: '' })
   const [googleSecretShown, setGoogleSecretShown] = useState(false)
   const [savingGoogle, setSavingGoogle] = useState(false)
+  const [proxyDraft, setProxyDraft] = useState('')
+  const [proxySaving, setProxySaving] = useState(false)
   const [transferBusy, setTransferBusy] = useState(false)
   const [transferError, setTransferError] = useState('')
   const desktopBridge = window.kinetixApp
@@ -101,7 +103,7 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
     finally { setAutoLaunchBusy(false) }
   }
 
-  function adoptTokens(data: Integrations) { setTokens({ vk: data.vk, yandex: data.yandex, google: data.google, googleSecret: data.googleSecret }) }
+  function adoptTokens(data: Integrations) { setTokens({ vk: data.vk, yandex: data.yandex, google: data.google, googleSecret: data.googleSecret, ytProxy: data.ytProxy ?? { set: false, length: 0 } }) }
   useEffect(() => {
     fetch('/api/integrations').then(r => r.json()).then(data => { if (data && !data.error) adoptTokens(data) }).catch(() => {})
   }, [])
@@ -162,6 +164,19 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
       onConfigChange()
     } catch (error) { onNotice(error instanceof Error ? error.message : 'Не удалось удалить настройки Google') }
     finally { setSavingGoogle(false) }
+  }
+
+  async function saveProxy(value: string) {
+    setProxySaving(true)
+    try {
+      const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ytProxy: value }) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Не удалось сохранить прокси')
+      adoptTokens(data)
+      setProxyDraft('')
+      onNotice(value ? 'Прокси для YouTube сохранён' : 'Прокси для YouTube отключён')
+    } catch (error) { onNotice(error instanceof Error ? error.message : 'Не удалось сохранить прокси') }
+    finally { setProxySaving(false) }
   }
 
   function downloadTransfer() {
@@ -338,6 +353,19 @@ export function SettingsView({ settings, onChange, onBack, onNotice, onConfigCha
         {test && <div className={`youtube-test ${test.ok ? 'ok' : 'fail'}`}>{test.ok ? <><Check size={14}/> YouTube отвечает{test.title ? `: «${test.title}»` : ''}. Подключение работает.</> : <><CircleAlert size={14}/> {test.error || 'Проверка не удалась'}</>}</div>}
         <div className="youtube-foot"><ShieldCheck size={13}/> {onDevice ? 'Cookies хранятся только на этом устройстве и никуда не отправляются.' : <>Cookies хранятся локально в <code>.data/youtube-cookies.txt</code> и никогда не покидают этот компьютер.</>}</div>
       </section>
+
+      {isIOS && <section className="set-card proxy-card">
+        <header><span className="set-icon tokens"><Globe size={18}/></span><div><strong>Прокси для YouTube</strong><small>YouTube через прокси, остальное — напрямую</small></div><span className={`set-status ${tokens?.ytProxy?.set ? 'on' : ''}`}>{tokens?.ytProxy?.set ? <Check size={12}/> : <CircleAlert size={12}/>} {tokens?.ytProxy?.set ? 'Включено' : 'Выключено'}</span></header>
+        <p className="youtube-lead">Если YouTube заблокирован в твоей сети, укажи прокси — Kinetix будет отправлять через него только запросы к YouTube. Яндекс Музыка и ВКонтакте останутся на обычном интернете, а системный VPN можно будет выключить.</p>
+        <div className="token-field">
+          <input type="text" value={proxyDraft} placeholder="http://логин:пароль@адрес:порт или socks5://адрес:порт" spellCheck={false} autoComplete="off" aria-label="Адрес прокси для YouTube" onChange={event => setProxyDraft(event.target.value)}/>
+        </div>
+        <div className="token-actions">
+          <button className="set-primary" disabled={proxySaving || !proxyDraft.trim()} onClick={() => saveProxy(proxyDraft.trim())}>{proxySaving ? <Loader2 className="spin" size={15}/> : <ShieldCheck size={15}/>} Сохранить</button>
+          {tokens?.ytProxy?.set && <button className="set-danger" disabled={proxySaving} onClick={() => saveProxy('')}><Trash2 size={15}/> Удалить</button>}
+        </div>
+        <div className="youtube-foot"><ShieldCheck size={13}/> Прокси хранится только на этом устройстве. Без прокси YouTube работает через системный VPN.</div>
+      </section>}
 
       <section className="set-card tokens-card">
         <header><span className="set-icon tokens"><KeyRound size={18}/></span><div><strong>Токены источников</strong><small>ВКонтакте и Яндекс Музыка</small></div></header>

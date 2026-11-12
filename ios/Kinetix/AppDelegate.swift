@@ -13,6 +13,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         UIApplication.shared.beginReceivingRemoteControlEvents()
 
         InnerTube.shared.setCookies(NativeStore.shared.cookies)
+        InnerTube.shared.setProxy(NativeStore.shared.ytProxy)
 
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.backgroundColor = UIColor(red: 8 / 255, green: 8 / 255, blue: 12 / 255, alpha: 1)

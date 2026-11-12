@@ -267,7 +267,8 @@ final class KinetixServer {
             "vk": tokenStatus(NativeStore.shared.vk),
             "yandex": tokenStatus(NativeStore.shared.yandex),
             "google": tokenStatus(""),
-            "googleSecret": tokenStatus("")
+            "googleSecret": tokenStatus(""),
+            "ytProxy": tokenStatus(NativeStore.shared.ytProxy)
         ]
     }
 
@@ -301,6 +302,17 @@ final class KinetixServer {
                 return try sendJSON(client, status: 400, ["error": "Токен слишком длинный"])
             }
             NativeStore.shared.setToken(name, value)
+        }
+        if let raw = payload["ytProxy"], !(raw is NSNull) {
+            let value = (raw as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.count > 512 {
+                return try sendJSON(client, status: 400, ["error": "Адрес прокси слишком длинный"])
+            }
+            if !value.isEmpty && ProxyConfig.parse(value) == nil {
+                return try sendJSON(client, status: 400, ["error": "Не похоже на адрес прокси. Пример: http://1.2.3.4:8080 или socks5://1.2.3.4:1080"])
+            }
+            NativeStore.shared.setYTProxy(value)
+            InnerTube.shared.setProxy(value)
         }
         try sendJSON(client, status: 200, integrations())
     }
@@ -400,6 +412,7 @@ final class KinetixServer {
         downloader = active
         registerStream(active, key: key)
         active.run(upstream)
+        kinetixLog.info("remote stream host=\(target.host ?? "?", privacy: .public) range=\(requestedRange ?? "bytes=0-", privacy: .public) status=\(active.status)")
 
         if !active.headWritten {
             noteStreamResult(active, scope: "remote")
@@ -428,21 +441,32 @@ final class KinetixServer {
         guard let url = URL(string: stream.url), !stream.url.isEmpty else {
             throw KinetixError("YouTube не отдал поток")
         }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
-        // googlevideo rejects URLs fetched with a different client's User-Agent.
-        request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("*/*", forHTTPHeaderField: "Accept")
         let requestedRange = range.flatMap { $0.isEmpty ? nil : $0 }
-        request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
-
-        let active = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil)
-        downloader = active
-        registerStream(active, key: key)
-        active.run(request)
-        kinetixLog.info("yt stream \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) status=\(active.status)")
+        var active: StreamDownloader?
+        // googlevideo answers 403 intermittently even for a fresh URL (the VPN
+        // exit IP rotates between connections). Repeating the same URL is cheap
+        // and usually lands; a full client rotation is the last resort.
+        for attempt in 0..<3 {
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 35)
+            // googlevideo rejects URLs fetched with a different client's User-Agent.
+            request.setValue(stream.userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue("*/*", forHTTPHeaderField: "Accept")
+            request.setValue(requestedRange ?? "bytes=0-", forHTTPHeaderField: "Range")
+            let current = StreamDownloader(client: client, fallbackType: stream.mime, fullResponse: requestedRange == nil, proxy: InnerTube.shared.proxyConfig)
+            downloader = current
+            registerStream(current, key: key)
+            current.run(request)
+            active = current
+            kinetixLog.info("yt stream \(videoId, privacy: .public) client=\(stream.tag, privacy: .public) range=\(requestedRange ?? "bytes=0-", privacy: .public) status=\(current.status) attempt=\(attempt)")
+            if current.headWritten || current.wasCanceled { break }
+            if current.status != 403 && current.status != 410 { break }
+            if attempt < 2 { Thread.sleep(forTimeInterval: 0.4) }
+        }
+        guard let active else { throw KinetixError("YouTube не отдал поток") }
 
         if !active.headWritten {
             noteStreamResult(active, scope: "yt")
+            if active.wasCanceled { return }
             if (active.status == 403 || active.status == 410) && retry {
                 InnerTube.shared.rotate()
                 InnerTube.shared.forget(videoId)
@@ -637,18 +661,21 @@ final class KinetixServer {
         private let client: Int32
         private let fallbackType: String
         private let fullResponse: Bool
+        private let proxy: ProxyConfig?
         private let semaphore = DispatchSemaphore(value: 0)
         private let lock = NSLock()
         private var session: URLSession?
         private var canceled = false
+        private var errorBody = Data()
         private(set) var status = 0
         private(set) var headWritten = false
         private(set) var detail = ""
 
-        init(client: Int32, fallbackType: String, fullResponse: Bool) {
+        init(client: Int32, fallbackType: String, fullResponse: Bool, proxy: ProxyConfig? = nil) {
             self.client = client
             self.fallbackType = fallbackType
             self.fullResponse = fullResponse
+            self.proxy = proxy
         }
 
         /// Called when the player seeks or retries the same track: the old
@@ -674,6 +701,7 @@ final class KinetixServer {
             // holding the player for 35 seconds per attempt.
             configuration.timeoutIntervalForRequest = 15
             configuration.timeoutIntervalForResource = 3600
+            if let proxy { configuration.connectionProxyDictionary = proxy.dictionary }
             let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
             lock.lock()
             self.session = session
@@ -684,7 +712,10 @@ final class KinetixServer {
                 return
             }
             session.dataTask(with: request).resume()
-            _ = semaphore.wait(timeout: .now() + 25)
+            // The transfer may legitimately take minutes on a slow VPN: the
+            // 15s idle timeout above already kills dead networks, so wait for
+            // the real end instead of cutting the player's socket mid-track.
+            _ = semaphore.wait(timeout: .now() + 3600)
             lock.lock()
             self.session = nil
             lock.unlock()
@@ -724,7 +755,12 @@ final class KinetixServer {
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-            guard headWritten else { return }
+            guard headWritten else {
+                if status != 200 && status != 206 && errorBody.count < 160 {
+                    errorBody.append(data.prefix(160 - errorBody.count))
+                }
+                return
+            }
             do {
                 try KinetixServer.writeAll(client, data)
             } catch {
@@ -735,7 +771,11 @@ final class KinetixServer {
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
             if status != 200 && status != 206 {
-                detail = KinetixText.shorten(error?.localizedDescription ?? detail, 80)
+                if !errorBody.isEmpty {
+                    detail = KinetixText.shorten(String(decoding: errorBody, as: UTF8.self), 120)
+                } else if let error {
+                    detail = KinetixText.shorten(error.localizedDescription, 80)
+                }
             }
             semaphore.signal()
         }
